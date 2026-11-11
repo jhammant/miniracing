@@ -1,5 +1,5 @@
 // Draws each track as an SVG (and a PNG with --png) for checking layouts:
-// the lap, solids, zones, movers, item boxes, pads, the bots' line and where
+// the lap, shortcuts, solids, zones, movers, item boxes, pads, the bots' line and where
 // they came unstuck in a simulated race.  node scripts/map.js [--png] [--out dir]
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -49,6 +49,9 @@ export function trackSvg(id) {
   out.push(`<polygon points="${Array.from({ length: track.n }, (_, i) => `${X(track.sx[i]).toFixed(1)},${Z(track.sz[i]).toFixed(1)}`).join(' ')}" fill="none" stroke="#777" stroke-width="${track.width * K}" stroke-linejoin="round"/>`);
   out.push(`<polygon points="${edge(1)}" fill="none" stroke="#fff" stroke-width="1"/>`, `<polygon points="${edge(-1)}" fill="none" stroke="#e33" stroke-width="1"/>`);
   out.push(`<polyline points="${Array.from({ length: track.n }, (_, i) => `${X(track.sx[i] + track.nx[i] * ai.lat[i]).toFixed(1)},${Z(track.sz[i] + track.nz[i] * ai.lat[i]).toFixed(1)}`).join(' ')}" fill="none" stroke="#6f6" stroke-width="1.5"/>`);
+  for (const c of world.cuts) {
+    out.push(`<polyline points="${c.x.map((x, i) => `${X(x).toFixed(1)},${Z(c.z[i]).toFixed(1)}`).join(' ')}" fill="none" stroke="#fa0" stroke-opacity="0.45" stroke-width="${c.hw * 2 * K}"/>`);
+  }
   for (let f = 0; f < 1; f += 0.05) {
     const p = track.pointAt(f * track.len, 0);
     out.push(`<text x="${X(p.x)}" y="${Z(p.z)}" fill="#ff0">${f.toFixed(2)}</text>`);
@@ -68,7 +71,10 @@ export function trackSvg(id) {
   for (const p of world.props) if (p.spec.shape === 'none') out.push(`<circle cx="${X(p.x)}" cy="${Z(p.z)}" r="6" fill="none" stroke="#aaa" stroke-dasharray="3"/>`);
   for (const p of world.props) out.push(`<text x="${X(p.x) + 6}" y="${Z(p.z) - 6}" fill="#fff" font-size="10">${p.m}</text>`);
   for (const m of world.movers) {
-    if (m.kind === 'orbit') out.push(`<circle cx="${X(m.cx)}" cy="${Z(m.cz)}" r="${m.rad * K}" fill="none" stroke="#0af" stroke-dasharray="6"/>`);
+    if (m.kind === 'pop') {
+      out.push(`<line x1="${X(m.from[0])}" y1="${Z(m.from[1])}" x2="${X(m.to[0])}" y2="${Z(m.to[1])}" stroke="#0af" stroke-dasharray="6"/>`,
+        `<circle cx="${X(m.to[0])}" cy="${Z(m.to[1])}" r="${m.r * K}" fill="#0af" opacity="0.5"/>`);
+    } else if (m.kind === 'orbit') out.push(`<circle cx="${X(m.cx)}" cy="${Z(m.cz)}" r="${m.rad * K}" fill="none" stroke="#0af" stroke-dasharray="6"/>`);
     else out.push(`<line x1="${X(m.a[0])}" y1="${Z(m.a[1])}" x2="${X(m.b[0])}" y2="${Z(m.b[1])}" stroke="#0af" stroke-width="${m.r * 2 * K}" opacity="0.5" stroke-linecap="round"/>`);
   }
   for (const b of world.boxes) out.push(`<rect x="${X(b.x) - 5}" y="${Z(b.z) - 5}" width="10" height="10" fill="#ff0" stroke="#000"/>`);

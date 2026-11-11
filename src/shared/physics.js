@@ -5,15 +5,14 @@ import { wrapAngle } from './track.js';
 
 export const CAR_R = 0.85;
 export const DT = 1 / 60;
-export const P = {
-  maxSpeed: 30, accel: 24, brake: 42, reverse: 9, turn: 3.4, grip: 9, drag: 0.7, g: 22,
-  boost: 1.45, jump: 8.5, offLimit: 12,
-};
+// The same for everything that races. How each kind of vehicle handles is in
+// vehicles.js, and a world carries its room's as `world.veh`.
+export const P = { g: 22, boost: 1.45, jump: 8.5, offLimit: 12 };
 
-// How fast the car can rotate at a given forward speed. The bots use the same
+// How fast a vehicle can rotate at a given forward speed. The bots use the same
 // curve to work out how fast a corner can be taken.
-export function turnRate(speed) {
-  return P.turn * Math.min(1, speed / 5) * (1 - 0.45 * Math.min(1, speed / P.maxSpeed));
+export function turnRate(speed, V) {
+  return V.turn * (V.pivot ? 1 : Math.min(1, speed / 5)) * (1 - 0.45 * Math.min(1, speed / V.maxSpeed));
 }
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -24,7 +23,7 @@ export function makeCar(id) {
     px: 0, pz: 0, py: 0, ph: 0,
     idx: 0, s: 0, lat: 0, total: 0, lapsDone: 0,
     boostT: 0, shieldT: 0, spinT: 0, squashT: 0, shrinkT: 0, fallT: 0, invT: 0,
-    offT: 0, wrongT: 0, slipT: 0, slip: false, catchup: 0,
+    offT: 0, wrongT: 0, slipT: 0, slip: false, catchup: 0, onCut: false, cutK: 0,
     frozen: true, finished: false, out: false, local: true,
   };
 }
@@ -38,7 +37,7 @@ export function placeCar(car, world, s, lat = 0) {
     px: p.x, pz: p.z, py: 0, ph: p.h,
     idx: p.i, s: ((s % track.len) + track.len) % track.len, lat, total: s,
     boostT: 0, shieldT: 0, spinT: 0, squashT: 0, shrinkT: 0, fallT: 0, invT: 0,
-    offT: 0, wrongT: 0, slipT: 0, slip: false,
+    offT: 0, wrongT: 0, slipT: 0, slip: false, onCut: false,
   });
 }
 
@@ -108,10 +107,24 @@ function inZone(car, zn) {
 
 export const carRadius = (car) => (car.shrinkT > 0 ? CAR_R * 0.6 : CAR_R);
 
+// The shortcut this car is on, if any; leaves the nearest point in car.cutK.
+function findCut(world, car) {
+  for (const c of world.cuts) {
+    if (!c.spans(car.idx)) continue;
+    let best = -1, bd = (c.hw + 0.3) * (c.hw + 0.3);
+    for (let k = 0; k < c.n; k++) {
+      const dx = car.x - c.x[k], dz = car.z - c.z[k], d = dx * dx + dz * dz;
+      if (d < bd) { bd = d; best = k; }
+    }
+    if (best >= 0) { car.cutK = best; return c; }
+  }
+  return null;
+}
+
 // One fixed step for one car. `inp` = { steer: -1..1 (+ = right), throttle, brake }.
-// `emit(type, car, data)` reports fall | respawn | bump | jump | land | pad | lap.
+// `emit(type, car, data)` reports fall | respawn | bump | jump | land | pad | squashed | lap.
 export function stepCar(car, inp, dt, world, emit) {
-  const { track } = world;
+  const { track, veh: V } = world, hover = V.hover > 0;
   car.px = car.x; car.pz = car.z; car.py = car.y; car.ph = car.h;
   for (const k of ['boostT', 'shieldT', 'spinT', 'squashT', 'shrinkT', 'invT']) if (car[k] > 0) car[k] = Math.max(0, car[k] - dt);
 
@@ -133,15 +146,17 @@ export function stepCar(car, inp, dt, world, emit) {
   car.steer += clamp(steer - car.steer, -dt * 9, dt * 9);
 
   // Surface
-  let maxMult = Math.abs(car.lat) <= track.hw + 0.3 ? 1 : world.def.offMult;
-  let grip = P.grip, accelMult = 1;
+  const off = world.def.offMult + (1 - world.def.offMult) * V.rough;
+  let maxMult = Math.abs(car.lat) <= track.hw + 0.3 ? 1 : off;
+  let grip = V.grip, accelMult = 1;
   if (!air) {
     for (const zn of world.zones) {
       if (!inZone(car, zn)) continue;
-      if (zn.kind === 'slick') grip = 0.8;
-      else if (zn.kind === 'sticky') maxMult *= 0.45;
+      if (zn.kind === 'boost') { if (car.boostT < 0.6) emit('pad', car); car.boostT = Math.max(car.boostT, 1); }
+      else if (hover) continue; // nothing on the ground touches a helicopter
+      else if (zn.kind === 'slick') grip = Math.min(grip, 0.8);
+      else if (zn.kind === 'sticky') maxMult *= 0.45 + 0.55 * V.rough;
       else if (zn.kind === 'hole') { startFall(car, emit); return; }
-      else if (zn.kind === 'boost') { if (car.boostT < 0.6) emit('pad', car); car.boostT = Math.max(car.boostT, 1); }
       else if (zn.kind === 'jump' && Math.hypot(car.vx, car.vz) > 9) { car.vy = P.jump; car.y = 0.06; emit('jump', car); }
     }
   }
@@ -150,22 +165,22 @@ export function stepCar(car, inp, dt, world, emit) {
   if (car.shrinkT > 0) maxMult *= 0.6;
   if (car.slip) maxMult *= 1.07;
   maxMult *= 1 + car.catchup;
-  const maxV = P.maxSpeed * maxMult;
+  const maxV = V.maxSpeed * maxMult;
 
   // Steering turns the nose; grip then drags the velocity round to follow it.
   let fx = Math.sin(car.h), fz = Math.cos(car.h);
   let vf = car.vx * fx + car.vz * fz;
   const sp = Math.abs(vf);
-  if (!air) car.h = wrapAngle(car.h - car.steer * turnRate(sp) * (vf < 0 ? -1 : 1) * dt);
+  if (!air) car.h = wrapAngle(car.h - car.steer * turnRate(sp, V) * (vf < 0 ? -1 : 1) * dt);
   fx = Math.sin(car.h); fz = Math.cos(car.h);
   const lx = fz, lz = -fx;
   vf = car.vx * fx + car.vz * fz;
   let vl = car.vx * lx + car.vz * lz;
   if (!air) {
-    if (throttle > 0 && vf < maxV) vf = Math.min(maxV, vf + P.accel * accelMult * throttle * dt * (vf < 0 ? 2 : 1));
+    if (throttle > 0 && vf < maxV) vf = Math.min(maxV, vf + V.accel * accelMult * throttle * dt * (vf < 0 ? 2 : 1));
     if (vf > maxV) vf -= Math.min(vf - maxV, ((vf - maxV) * 4 + 6) * dt);
-    if (brake > 0) vf = vf > 0.5 ? Math.max(0, vf - P.brake * brake * dt) : Math.max(-P.reverse, vf - 14 * brake * dt);
-    if (throttle === 0 && brake === 0) vf -= vf * Math.min(1, P.drag * dt);
+    if (brake > 0) vf = vf > 0.5 ? Math.max(0, vf - V.brake * brake * dt) : Math.max(-V.reverse, vf - 14 * brake * dt);
+    if (throttle === 0 && brake === 0) vf -= vf * Math.min(1, V.drag * dt);
     vl *= Math.exp(-(brake > 0 && sp > 8 ? grip * 0.45 : grip) * dt);
   }
   car.vx = fx * vf + lx * vl; car.vz = fz * vf + lz * vl;
@@ -176,28 +191,41 @@ export function stepCar(car, inp, dt, world, emit) {
   }
   car.x += car.vx * dt; car.z += car.vz * dt;
 
-  const r = carRadius(car), flying = car.y > 0.6;
+  const r = carRadius(car), flying = hover || car.y > 0.6;
   for (const o of world.solids) {
     if (o.low && flying) continue;
     if (o.shape === 'circle') hitCircle(car, o, r, emit); else hitBox(car, o, r, emit);
   }
-  for (const m of world.movers) hitCircle(car, m, r, emit);
+  for (const m of world.movers) {
+    if (!m.on) continue;
+    // Something landing on a car flattens it for a moment.
+    if (m.slam && car.squashT <= 0 && car.shieldT <= 0 && Math.hypot(car.x - m.x, car.z - m.z) < m.r + r) { car.squashT = 1.6; emit('squashed', car); }
+    hitCircle(car, m, r, emit);
+  }
 
   // Edge of the world: a wall to bounce off, or a drop.
   const hx = world.hx, hz = world.hz;
   if (world.def.edge === 'wall') {
     if (car.x > hx - r) { car.x = hx - r; bounce(car, -1, 0, emit); } else if (car.x < -hx + r) { car.x = -hx + r; bounce(car, 1, 0, emit); }
     if (car.z > hz - r) { car.z = hz - r; bounce(car, 0, -1, emit); } else if (car.z < -hz + r) { car.z = -hz + r; bounce(car, 0, 1, emit); }
-  } else if (!air && (Math.abs(car.x) > hx + 0.2 || Math.abs(car.z) > hz + 0.2)) {
+  } else if (!air && !hover && (Math.abs(car.x) > hx + 0.2 || Math.abs(car.z) > hz + 0.2)) {
     startFall(car, emit);
     return;
   }
 
-  // Progress round the lap.
+  // Progress round the lap. Off the road, a shortcut counts if the car is on one.
   const i = track.nearest(car.x, car.z, car.idx);
-  const ox = car.x - track.sx[i], oz = car.z - track.sz[i];
+  const ox = car.x - track.sx[i], oz = car.z - track.sz[i], far = ox * ox + oz * oz;
   const lim = track.hw + P.offLimit;
-  if (ox * ox + oz * oz < lim * lim) {
+  const cut = world.cuts.length && far > track.hw * track.hw ? findCut(world, car) : null;
+  car.onCut = !!cut;
+  if (cut) {
+    const s = (cut.s0 + cut.span * (car.cutK / (cut.n - 1))) % track.len;
+    let ds = s - car.s;
+    if (ds > track.len / 2) ds -= track.len; else if (ds < -track.len / 2) ds += track.len;
+    car.total += ds; car.s = s; car.idx = Math.round(s / track.step) % track.n; car.lat = 0;
+    car.offT = 0;
+  } else if (far < lim * lim) {
     const s = i * track.step + track.along(i, car.x, car.z);
     let ds = s - car.s;
     if (ds > track.len / 2) ds -= track.len; else if (ds < -track.len / 2) ds += track.len;

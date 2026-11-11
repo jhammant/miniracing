@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TRACKS } from '../src/shared/tracks.js';
 import { PROPS } from '../src/shared/props.js';
-import { getWorld } from '../src/shared/world.js';
+import { getWorld, updateMovers } from '../src/shared/world.js';
+import { VEHICLES } from '../src/shared/vehicles.js';
 import { makeCar, placeCar, stepCar, packCar, unpackCar, DT, P } from '../src/shared/physics.js';
 import { rollItem, itemWeights, ITEM_IDS } from '../src/shared/items.js';
 import { simulate } from '../scripts/sim.js';
@@ -29,6 +30,10 @@ test('a full grid of bots finishes a race on every track, well above the minimum
     assert.equal(r.finished, 16, `${def.id}: all bots finish`);
     assert.ok(r.best * 1000 > def.minLap * 1.4, `${def.id}: bot best ${r.best.toFixed(1)}s leaves room above minLap`);
     assert.ok(r.worst < 45, `${def.id}: nobody gets lost (${r.worst.toFixed(1)}s)`);
+    // Bots never take a shortcut, so allow for a player who takes every one.
+    const world = getWorld(def.id), saved = world.cuts.reduce((sum, c) => sum + c.span - (c.n - 1), 0);
+    assert.ok(saved >= 0 && saved < world.track.len * 0.2, `${def.id}: shortcuts save ${saved.toFixed(0)}m, under a fifth of the lap`);
+    assert.ok(r.best * (1 - saved / world.track.len) * 1000 > def.minLap * 1.25, `${def.id}: a lap with every shortcut still clears minLap`);
   }
 });
 
@@ -42,8 +47,67 @@ test('a car accelerates to top speed and steering right turns it clockwise from 
   const speed = Math.hypot(car.vx, car.vz);
   for (let i = 0; i < 20; i++) stepCar(car, { steer: 1, throttle: 1, brake: 0 }, DT, world, noop);
   // Assert
-  assert.ok(speed > 10 && speed <= P.maxSpeed + 0.01);
+  assert.ok(speed > 10 && speed <= world.veh.maxSpeed + 0.01);
   assert.ok(car.h < h0, 'positive steer reduces the heading');
+});
+
+test('every room races a known vehicle, and a tank turns on the spot where a car cannot', () => {
+  // Arrange
+  const keys = Object.keys(VEHICLES.car).sort();
+  const turned = (id) => {
+    const world = getWorld(id), car = makeCar(1);
+    placeCar(car, world, 0, 0); car.frozen = false;
+    const h0 = car.h;
+    for (let i = 0; i < 20; i++) stepCar(car, { steer: 1, throttle: 0, brake: 0 }, DT, world, noop);
+    return Math.abs(car.h - h0);
+  };
+  // Act / Assert
+  for (const v of Object.values(VEHICLES)) assert.deepEqual(Object.keys(v).sort(), keys);
+  for (const def of TRACKS) assert.ok(VEHICLES[def.vehicle || 'car'], `${def.id} races ${def.vehicle}`);
+  assert.equal(getWorld('desk').veh, VEHICLES.tank);
+  assert.ok(turned('desk') > 0.5, 'a tank pivots at a standstill');
+  assert.ok(turned('snooker') < 0.01, 'a car does not');
+});
+
+test('the toast is harmless in the air, flattens whoever it lands on, then goes away', () => {
+  // Arrange
+  const world = getWorld('breakfast'), toast = world.movers.find((m) => m.kind === 'pop'), seen = [];
+  const car = makeCar(1);
+  placeCar(car, world, 0, 0); car.frozen = false;
+  car.x = toast.to[0]; car.z = toast.to[1];
+  // Act: in the air
+  updateMovers(world, 0.4);
+  stepCar(car, { steer: 0, throttle: 0, brake: 0 }, DT, world, (t) => seen.push(t));
+  const flying = { on: toast.on, y: toast.y, squashed: car.squashT > 0 };
+  // Act: the moment it lands
+  updateMovers(world, 0.92);
+  stepCar(car, { steer: 0, throttle: 0, brake: 0 }, DT, world, (t) => seen.push(t));
+  // Assert
+  assert.deepEqual(flying, { on: false, y: flying.y, squashed: false });
+  assert.ok(flying.y > 3, 'it is well above the cars on the way over');
+  assert.ok(toast.on && toast.slam && car.squashT > 0 && seen.includes('squashed'));
+  updateMovers(world, 5);
+  assert.ok(toast.hidden && !toast.on, 'gone until the next one');
+  updateMovers(world, 0);
+});
+
+test('the cereal cut counts as the stretch of lap it bypasses, and only from that stretch', () => {
+  // Arrange
+  const world = getWorld('breakfast'), { track } = world, cut = world.cuts[0], mid = Math.floor(cut.n / 2);
+  const at = (idx) => {
+    const car = makeCar(1);
+    placeCar(car, world, idx * track.step, 0); car.frozen = false;
+    car.x = cut.x[mid]; car.z = cut.z[mid]; car.vx = car.vz = 0;
+    stepCar(car, { steer: 0, throttle: 0, brake: 0 }, DT, world, noop);
+    return car;
+  };
+  // Act
+  const taking = at(cut.i0 + 5), elsewhere = at((cut.i0 + Math.floor(track.n / 2)) % track.n);
+  // Assert
+  assert.ok(taking.onCut, 'a car that left the road at the way in is on the cut');
+  const along = (taking.s - cut.s0 + track.len) % track.len;
+  assert.ok(along > cut.span * 0.3 && along < cut.span * 0.7, `halfway along the cut is about halfway round the bypassed stretch (${along.toFixed(0)} of ${cut.span.toFixed(0)}m)`);
+  assert.ok(!elsewhere.onCut, 'a car from the far side of the lap is just off the road');
 });
 
 test('driving off the breakfast table falls, then respawns on the lap', () => {

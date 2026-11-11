@@ -2,21 +2,21 @@
 // and a speed for every sample; botInput() chases that line.
 
 import { wrapAngle } from './track.js';
-import { P, CAR_R, turnRate } from './physics.js';
+import { CAR_R, turnRate } from './physics.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 export function bakeAI(world) {
   if (world.ai) return world.ai;
-  const { track } = world;
+  const { track, veh: V } = world;
   const { n, hw, step } = track;
   const lat = new Float64Array(n), vmax = new Float64Array(n);
 
   // Things worth steering round: solids, slow or slippery zones, holes.
   const blockers = [];
-  for (const o of world.solids) blockers.push({ x: o.x, z: o.z, r: o.shape === 'circle' ? o.r : Math.max(o.hw, o.hd), w: 1 });
+  for (const o of world.solids) if (!(o.low && V.hover)) blockers.push({ x: o.x, z: o.z, r: o.shape === 'circle' ? o.r : Math.max(o.hw, o.hd), w: 1 });
   for (const zn of world.zones) {
-    if (zn.kind === 'boost' || zn.kind === 'jump') continue;
+    if (zn.kind === 'boost' || zn.kind === 'jump' || V.hover) continue;
     blockers.push({ x: zn.x, z: zn.z, r: (zn.r || Math.max(zn.hw, zn.hd)) * 0.8, w: zn.kind === 'hole' ? 1 : 0.5 });
   }
   const edge = hw - CAR_R - 0.6;
@@ -50,9 +50,9 @@ export function bakeAI(world) {
   // Corner speed from the same steering curve the cars use, then a backwards
   // pass so the bots brake in time.
   for (let i = 0; i < n; i++) {
-    const k = Math.abs(track.curv[i]) * 1.12;
-    let v = P.maxSpeed * 1.5;
-    while (v > 8 && turnRate(v) < v * k) v -= 0.5;
+    const k = Math.abs(track.curv[i]) * 1.12 * V.caution;
+    let v = V.maxSpeed * 1.5;
+    while (v > 8 && turnRate(v, V) < v * k) v -= 0.5;
     vmax[i] = v;
   }
   for (let lap = 0; lap < 2; lap++) {

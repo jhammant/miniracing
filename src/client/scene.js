@@ -3,7 +3,9 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { buildProp, buildCar, buildItemBox, buildBoostPad, buildShield } from './models.js';
+import { buildProp, buildVehicle, buildItemBox, buildBoostPad, buildShield } from './models.js';
+import { lookOf } from './rooms/index.js';
+import { canvasTex } from './rooms/paint.js';
 import { wrapAngle } from '../shared/track.js';
 import { isTouch } from './store.js';
 
@@ -12,120 +14,11 @@ const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const ease = (rate, dt) => 1 - Math.exp(-rate * dt);
 const FONT = '"Press Start 2P", monospace';
 
-const THEMES = {
-  breakfast: { bg: '#3a211b', sky: '#fff3dc', ground: '#a9805c', sun: '#fff1d6', dust: '#f3e3c2' },
-  snooker: { bg: '#1c1016', sky: '#f4f1e4', ground: '#1d4a30', sun: '#fff6e0', dust: '#d6f0e0' },
-  kitchen: { bg: '#27323a', sky: '#f3fbff', ground: '#8a9aa3', sun: '#ffffff', dust: '#e6edf0' },
-  bedroom: { bg: '#2b2440', sky: '#fff0f6', ground: '#6e7fb0', sun: '#fff2e2', dust: '#e9e2f5' },
-};
-
-// ---- canvas textures --------------------------------------------------------
-
-function canvasTex(w, h, draw, { repeat, aniso = 1, clampEdge = false } = {}) {
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  draw(c.getContext('2d'), w, h);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = aniso;
-  if (!clampEdge) { tex.wrapS = tex.wrapT = THREE.RepeatWrapping; }
-  if (repeat) tex.repeat.set(repeat[0], repeat[1]);
-  return tex;
-}
-
-function speckle(g, w, h, n, colors, size = 1) {
-  for (let i = 0; i < n; i++) {
-    g.fillStyle = colors[i % colors.length];
-    g.fillRect(Math.random() * w, Math.random() * h, size, size);
-  }
-}
-
-const drawGingham = (g, w, h) => {
-  g.fillStyle = '#f8f1e3'; g.fillRect(0, 0, w, h);
-  g.fillStyle = 'rgba(211, 62, 52, 0.5)';
-  g.fillRect(0, 0, w / 2, h); g.fillRect(0, 0, w, h / 2);
-  g.fillStyle = 'rgba(255,255,255,0.10)';
-  for (let i = 0; i < w; i += 4) { g.fillRect(i, 0, 1, h); g.fillRect(0, i, w, 1); }
-};
-
-const drawTiles = (a, b, grout) => (g, w, h) => {
-  const t = w / 2;
-  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) { g.fillStyle = (i + j) % 2 ? a : b; g.fillRect(i * t, j * t, t, t); }
-  speckle(g, w, h, 900, ['rgba(255,255,255,0.10)', 'rgba(0,0,0,0.05)'], 2);
-  g.fillStyle = grout;
-  for (let i = 0; i < 2; i++) { g.fillRect(i * t - 2, 0, 4, h); g.fillRect(0, i * t - 2, w, 4); }
-  g.fillRect(w - 2, 0, 2, h); g.fillRect(0, h - 2, w, 2);
-};
-
-function drawBaize(world) {
-  return (g, w, h) => {
-    const sx = w / (world.hx * 2), X = (x) => (x + world.hx) * sx, Z = (z) => (z + world.hz) * sx;
-    g.fillStyle = '#1b8a4a'; g.fillRect(0, 0, w, h);
-    speckle(g, w, h, 16000, ['rgba(255,255,255,0.05)', 'rgba(0,0,0,0.07)', 'rgba(120,255,170,0.05)'], 2);
-    g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 2.5;
-    g.beginPath(); g.moveTo(X(-58), 0); g.lineTo(X(-58), h); g.stroke();
-    g.beginPath(); g.arc(X(-58), Z(0), 13 * sx, Math.PI / 2, -Math.PI / 2); g.stroke();
-    g.fillStyle = 'rgba(255,255,255,0.6)';
-    for (const x of [0, 45, 80]) { g.beginPath(); g.arc(X(x), Z(0), 3, 0, 7); g.fill(); }
-  };
-}
-
-function drawRug(world) {
-  return (g, w, h) => {
-    const sx = w / (world.hx * 2), { track } = world;
-    g.fillStyle = '#7f93c9'; g.fillRect(0, 0, w, h);
-    speckle(g, w, h, 9000, ['rgba(255,255,255,0.06)', 'rgba(0,0,40,0.07)'], 2);
-    const m = 5 * sx, r = 10 * sx;
-    const rr = (inset, fill) => { g.fillStyle = fill; g.beginPath(); g.roundRect(m + inset, m + inset, w - 2 * (m + inset), h - 2 * (m + inset), r); g.fill(); };
-    // Fringe, border, then the printed town.
-    g.strokeStyle = '#f3e7c9'; g.lineWidth = 2;
-    for (let y = m + r; y < h - m - r; y += 5) { g.beginPath(); g.moveTo(m - 9, y); g.lineTo(m, y); g.moveTo(w - m, y); g.lineTo(w - m + 9, y); g.stroke(); }
-    rr(0, '#f3e7c9'); rr(7, '#e8503a'); rr(12, '#f3e7c9'); rr(16, '#78c462');
-    speckle(g, w, h, 5000, ['rgba(255,255,255,0.05)', 'rgba(0,60,0,0.06)'], 2);
-    // Printed trees and flowers, kept clear of the road.
-    const rnd = (() => { let s = 7; return () => { s = (s * 16807) % 2147483647; return s / 2147483647; }; })();
-    for (let i = 0; i < 260; i++) {
-      const x = (rnd() * 2 - 1) * (world.hx - 12), z = (rnd() * 2 - 1) * (world.hz - 12);
-      const j = track.locate(x, z);
-      if (Math.hypot(x - track.sx[j], z - track.sz[j]) < track.hw + 4) continue;
-      const px = (x + world.hx) * sx, pz = (z + world.hz) * sx;
-      if (i % 3 === 0) {
-        g.fillStyle = '#3f9a4b'; g.beginPath(); g.arc(px, pz, 9, 0, 7); g.fill();
-        g.fillStyle = '#5cb85c'; g.beginPath(); g.arc(px - 2, pz - 2, 5, 0, 7); g.fill();
-      } else {
-        g.fillStyle = ['#fff', '#ffd23f', '#ff8fab'][i % 3]; g.beginPath(); g.arc(px, pz, 2.5, 0, 7); g.fill();
-      }
-    }
-  };
-}
-
-// The road surface: u runs across the track, v along it.
-const RIBBON = {
-  breakfast: (g, w, h) => {
-    g.fillStyle = 'rgba(255,250,235,0.34)'; g.fillRect(0, 0, w, h);
-    speckle(g, w, h, 260, ['rgba(255,255,255,0.35)', 'rgba(190,150,90,0.25)'], 2);
-  },
-  snooker: (g, w, h) => {
-    g.fillStyle = 'rgba(255,255,255,0.07)'; g.fillRect(0, 0, w, h);
-    for (const x of [1, w - 9]) {
-      g.fillStyle = 'rgba(240,250,255,0.85)'; g.fillRect(x, 0, 8, h);
-      for (let i = 0; i < 60; i++) { g.clearRect(x + Math.random() * 8, Math.random() * h, 2, 2); }
-    }
-  },
-  kitchen: (g, w, h) => {
-    g.fillStyle = 'rgba(40,70,100,0.16)'; g.fillRect(0, 0, w, h);
-    for (const x of [0, w - 10]) {
-      g.fillStyle = '#ffd23f'; g.fillRect(x, 0, 10, h);
-      g.fillStyle = '#2b2b2b';
-      for (let y = -16; y < h; y += 32) { g.beginPath(); g.moveTo(x, y); g.lineTo(x + 10, y + 10); g.lineTo(x + 10, y + 26); g.lineTo(x, y + 16); g.fill(); }
-    }
-  },
-  bedroom: (g, w, h) => {
-    g.fillStyle = '#5d6373'; g.fillRect(0, 0, w, h);
-    speckle(g, w, h, 500, ['rgba(255,255,255,0.06)', 'rgba(0,0,0,0.08)'], 2);
-    g.fillStyle = '#f5f5f5'; g.fillRect(3, 0, 5, h); g.fillRect(w - 8, 0, 5, h);
-    g.fillStyle = '#ffd23f'; g.fillRect(w / 2 - 2, 0, 4, h / 2);
-  },
+// A shortcut's surface unless the room paints its own: a faint strip, dashed edges.
+const drawCut = (g, w, h) => {
+  g.fillStyle = 'rgba(255,255,255,0.14)'; g.fillRect(0, 0, w, h);
+  g.fillStyle = 'rgba(255,255,255,0.8)';
+  for (const x of [3, w - 9]) for (let y = 0; y < h; y += 32) g.fillRect(x, y, 6, 16);
 };
 
 // ---- helpers ----------------------------------------------------------------
@@ -272,15 +165,18 @@ export class Scene {
     if (this.worldGroup) this.root.remove(this.worldGroup);
     for (const x of this.owned) x.dispose();
     this.owned = [];
-    const theme = this.theme = THEMES[world.def.id] || THEMES.kitchen;
+    // Another room can mean another kind of vehicle, so the old ones go.
+    for (const id of [...this.cars.keys()]) this.dropCar(id);
+    const look = this.look = lookOf(world.def.id), theme = this.theme = look.theme;
     this.root.background = new THREE.Color(theme.bg);
     this.root.fog.color.set(theme.bg);
     this.hemi.color.set(theme.sky); this.hemi.groundColor.set(theme.ground);
     this.sun.color.set(theme.sun);
 
-    const g = this.worldGroup = new THREE.Group();
-    this.buildRoom(g, world);
+    const g = this.worldGroup = new THREE.Group(), room = this.roomKit(g, world);
+    look.build(room);
     this.buildTrack(g, world);
+    look.dress?.(room);
 
     const props = new THREE.Group();
     for (const p of world.props) {
@@ -292,10 +188,18 @@ export class Scene {
 
     this.movers = world.movers.map((mv) => {
       const holder = new THREE.Group(), roll = new THREE.Group(), model = buildProp(mv.m, { color: mv.c });
-      const rolls = mv.m === 'ball' || mv.m === 'toyBall';
+      const pop = mv.kind === 'pop', rolls = !pop && (mv.roll ?? (mv.m === 'ball' || mv.m === 'toyBall'));
       if (rolls) { roll.position.y = mv.r; model.position.y = -mv.r; }
       roll.add(model); holder.add(roll); g.add(holder);
-      return { mv, holder, roll, rolls, lx: mv.x, lz: mv.z };
+      let mark = null;
+      if (pop) {
+        // Where it comes down: a faint ring all the time, a closing red one while it is in the air.
+        mark = new THREE.Mesh(this.own(new THREE.RingGeometry(mv.r * 0.8, mv.r, 28).rotateX(-Math.PI / 2)),
+          this.own(new THREE.MeshBasicMaterial({ color: '#ff3b3b', transparent: true, opacity: 0.2, depthWrite: false })));
+        mark.position.set(mv.to[0], 0.08, mv.to[1]); mark.renderOrder = 2;
+        g.add(mark);
+      }
+      return { mv, holder, roll, rolls, pop, mark, lx: mv.x, lz: mv.z };
     });
     this.pads = world.pads.map((p) => {
       const m = buildBoostPad();
@@ -313,65 +217,48 @@ export class Scene {
     this.cam.snap = true;
   }
 
-  buildRoom(g, world) {
-    const { def, hx, hz } = world, w = hx * 2, d = hz * 2, id = def.id;
-    const lam = (opts) => this.own(new THREE.MeshLambertMaterial(opts));
+  // What a room's look builds with (see rooms/index.js).
+  roomKit(g, world) {
+    const { hx, hz } = world, own = (x) => this.own(x);
+    const lam = (opts) => own(new THREE.MeshLambertMaterial(opts));
     const box = (sx, sy, sz, x, y, z, mat, shadow = true) => {
-      const m = new THREE.Mesh(this.own(new THREE.BoxGeometry(sx, sy, sz)), mat);
+      const m = new THREE.Mesh(own(new THREE.BoxGeometry(sx, sy, sz)), mat);
       m.position.set(x, y, z); m.castShadow = shadow; m.receiveShadow = true; m.matrixAutoUpdate = false; m.updateMatrix();
       g.add(m);
       return m;
     };
     const plane = (sx, sz, y, mat) => {
-      const m = new THREE.Mesh(this.own(new THREE.PlaneGeometry(sx, sz).rotateX(-Math.PI / 2)), mat);
+      const m = new THREE.Mesh(own(new THREE.PlaneGeometry(sx, sz).rotateX(-Math.PI / 2)), mat);
       m.position.y = y; m.receiveShadow = true; m.matrixAutoUpdate = false; m.updateMatrix();
       g.add(m);
       return m;
     };
-    const tex = (wd, ht, draw, opts) => this.own(canvasTex(wd, ht, draw, { aniso: this.aniso, ...opts }));
+    const tex = (wd, ht, draw, opts) => own(canvasTex(wd, ht, draw, { aniso: this.aniso, ...opts }));
+    return { THREE, g, world, w: hx * 2, d: hz * 2, hx, hz, theme: this.theme, own, lam, box, plane, tex };
+  }
 
-    if (id === 'breakfast') {
-      plane(w, d, 0, lam({ map: tex(64, 64, drawGingham, { repeat: [w / 20, d / 20] }) }));
-      // The cloth hangs over the edge; the kitchen floor is a long way down.
-      const cloth = lam({ color: '#f1e6d2' });
-      box(w, 14, 0.6, 0, -7, hz + 0.3, cloth, false); box(w, 14, 0.6, 0, -7, -hz - 0.3, cloth, false);
-      box(0.6, 14, d, hx + 0.3, -7, 0, cloth, false); box(0.6, 14, d, -hx - 0.3, -7, 0, cloth, false);
-      box(w - 6, 4, d - 6, 0, -2.1, 0, lam({ color: '#8a5a33' }), false);
-      const floor = plane(1600, 1600, -95, lam({ color: '#b98a6a', map: tex(256, 256, drawTiles('#e9d9c2', '#c98f6b', '#8f7a66'), { repeat: [22, 22] }) }));
-      floor.receiveShadow = false;
-    } else if (id === 'snooker') {
-      plane(w, d, 0, lam({ map: tex(1024, 512, drawBaize(world), { clampEdge: true }) }));
-      const cushion = lam({ color: '#157a3f' }), wood = lam({ color: '#6b3a1c' }), brass = lam({ color: '#c9a23f' });
-      const gap = 8, cw = 5, ch = 2.4;
-      for (const sz of [-1, 1]) {
-        for (const sx of [-1, 1]) box(hx - gap * 1.5, ch, cw, sx * (hx + gap * 0.5) / 2 + sx * 0.25 * gap, ch / 2, sz * (hz + cw / 2), cushion);
-        box(w + 34, 3.4, 12, 0, 1.7, sz * (hz + cw + 6), wood);
-      }
-      for (const sx of [-1, 1]) {
-        box(cw, ch, d - gap * 2, sx * (hx + cw / 2), ch / 2, 0, cushion);
-        box(12, 3.4, d + 10, sx * (hx + cw + 6), 1.7, 0, wood);
-        for (const sz of [-1, 1]) box(9, 3.6, 9, sx * (hx + 3), 1.8, sz * (hz + 3), brass);
-      }
-      box(w + 20, 30, d + 20, 0, -15.2, 0, wood, false);
-      plane(1600, 1600, -70, lam({ color: '#4a2733' })).receiveShadow = false;
-    } else {
-      const kitchen = id === 'kitchen';
-      plane(w, d, 0, lam({
-        map: kitchen
-          ? tex(256, 256, drawTiles('#f2ead9', '#a9c9cf', '#b3a892'), { repeat: [w / 44, d / 44] })
-          : tex(1024, Math.round(1024 * d / w), drawRug(world), { clampEdge: true }),
-      }));
-      const skirting = lam({ color: kitchen ? '#fbfbf6' : '#fff6ea' }), wall = lam({ color: kitchen ? '#cfe6ea' : '#f6c9d8' });
-      for (const s of [-1, 1]) {
-        box(w + 8, 7, 4, 0, 3.5, s * (hz + 2), skirting); box(4, 7, d, s * (hx + 2), 3.5, 0, skirting);
-        box(w + 8, 0.5, 5, 0, 7.2, s * (hz + 2.5), wall, false); box(5, 0.5, d, s * (hx + 2.5), 7.2, 0, wall, false);
-      }
-      plane(1600, 1600, -0.5, lam({ color: this.theme.bg })).receiveShadow = false;
-    }
+  // A painted strip along a line of { x, z, nx, nz, u } points: u runs across it, v along.
+  strip(g, pts, half, y, paint, reps) {
+    const pos = [], uv = [], idx = [], n = pts.length - 1;
+    pts.forEach((p, i) => {
+      pos.push(p.x + p.nx * half, y, p.z + p.nz * half, p.x - p.nx * half, y, p.z - p.nz * half);
+      uv.push(p.u, (i / n) * reps, 1 - p.u, (i / n) * reps);
+      if (i < n) { const a = i * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+    });
+    const geo = this.own(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const map = this.own(canvasTex(128, 128, paint, { aniso: this.aniso }));
+    const mesh = new THREE.Mesh(geo, this.own(new THREE.MeshLambertMaterial({ map, transparent: true, depthWrite: false, side: THREE.DoubleSide })));
+    mesh.receiveShadow = true; mesh.renderOrder = 1;
+    g.add(mesh);
+    return mesh;
   }
 
   buildTrack(g, world) {
-    const { track, def } = world, n = track.n, half = track.hw + 0.55;
+    const { track } = world, n = track.n, half = track.hw + 0.55;
     // Where the lap crosses itself, skip the edge lines so the junction reads as open road.
     const crossing = new Uint8Array(n);
     for (let i = 0; i < n; i++) {
@@ -381,24 +268,21 @@ export class Scene {
         if (Math.hypot(track.sx[i] - track.sx[j], track.sz[i] - track.sz[j]) < track.hw * 1.5) { crossing[i] = 1; break; }
       }
     }
-    const reps = Math.max(1, Math.round(track.len / 9));
-    const pos = [], uv = [], idx = [];
-    for (let i = 0; i <= n; i++) {
-      const k = i % n, x = track.sx[k], z = track.sz[k], nx = track.nx[k], nz = track.nz[k];
-      const u = crossing[k] ? 0.2 : 0;
-      pos.push(x + nx * half, 0.05, z + nz * half, x - nx * half, 0.05, z - nz * half);
-      uv.push(u, (i / n) * reps, 1 - u, (i / n) * reps);
-      if (i < n) { const a = i * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+    // Shortcuts go down first so the road is painted over where they join it.
+    for (const c of world.cuts) {
+      const pts = [];
+      for (let i = 0; i < c.n; i++) {
+        const a = Math.max(0, i - 1), b = Math.min(c.n - 1, i + 1), dx = c.x[b] - c.x[a], dz = c.z[b] - c.z[a], l = Math.hypot(dx, dz) || 1;
+        pts.push({ x: c.x[i], z: c.z[i], nx: dz / l, nz: -dx / l, u: 0 });
+      }
+      this.strip(g, pts, c.hw, 0.04, this.look.cut || drawCut, Math.max(1, Math.round(c.n / 9)));
     }
-    const geo = this.own(new THREE.BufferGeometry());
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
-    geo.setIndex(idx);
-    geo.computeVertexNormals();
-    const map = this.own(canvasTex(128, 128, RIBBON[def.id] || RIBBON.kitchen, { aniso: this.aniso }));
-    const ribbon = new THREE.Mesh(geo, this.own(new THREE.MeshLambertMaterial({ map, transparent: true, depthWrite: false, side: THREE.DoubleSide })));
-    ribbon.receiveShadow = true; ribbon.renderOrder = 1;
-    g.add(ribbon);
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const k = i % n;
+      pts.push({ x: track.sx[k], z: track.sz[k], nx: track.nx[k], nz: track.nz[k], u: crossing[k] ? 0.2 : 0 });
+    }
+    this.strip(g, pts, half, 0.05, this.look.ribbon, Math.max(1, Math.round(track.len / 9)));
 
     // Start line: a chequered strip, with a flag post either side.
     const p0 = track.pointAt(0, 0);
@@ -419,24 +303,6 @@ export class Scene {
       flag.position.set(q.x - Math.cos(p0.h) * 1.2 * s, 4.2, q.z + Math.sin(p0.h) * 1.2 * s); flag.rotation.y = p0.h;
       g.add(post, flag);
     }
-
-    // Breakfast: the road is marked out with cereal hoops.
-    if (def.id === 'breakfast') {
-      const gap = 2.1, count = Math.floor(track.len / gap) * 2;
-      const hoops = new THREE.InstancedMesh(this.own(new THREE.TorusGeometry(0.52, 0.22, 5, 9).rotateX(Math.PI / 2)),
-        this.own(new THREE.MeshLambertMaterial({ color: '#e0a94a' })), count);
-      const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
-      let rs = 3;
-      const rnd = () => { rs = (rs * 16807) % 2147483647; return rs / 2147483647; };
-      for (let i = 0; i < count; i++) {
-        const side = i % 2 ? 1 : -1, p = track.pointAt(Math.floor(i / 2) * gap + rnd() * 0.5, side * (track.hw + 0.35 + rnd() * 0.35));
-        e.set((rnd() - 0.5) * 0.3, rnd() * 6.3, (rnd() - 0.5) * 0.3);
-        m.compose(v.set(p.x, 0.22, p.z), q.setFromEuler(e), one);
-        hoops.setMatrixAt(i, m);
-      }
-      hoops.castShadow = true; hoops.receiveShadow = true;
-      g.add(hoops);
-    }
   }
 
   // ---- cars -----------------------------------------------------------------
@@ -444,7 +310,7 @@ export class Scene {
   carVis(car, myCar) {
     let v = this.cars.get(car.id);
     if (!v) {
-      const group = new THREE.Group(), body = buildCar(car.color, car.id % 4);
+      const group = new THREE.Group(), body = buildVehicle(this.world ? this.world.def.vehicle : 'car', car.color, car.id % 4);
       body.traverse((o) => { if (o.isMesh) o.castShadow = true; });
       const blob = new THREE.Mesh(this.blobGeo, this.blobMat);
       blob.renderOrder = 3;
@@ -473,7 +339,7 @@ export class Scene {
   }
 
   syncCars(game, dt) {
-    const a = game.alpha, blink = Math.floor(this.t * 12) % 2 === 0;
+    const a = game.alpha, blink = Math.floor(this.t * 12) % 2 === 0, V = game.world.veh;
     for (const id of this.cars.keys()) if (!game.cars.has(id)) this.dropCar(id);
     for (const car of game.cars.values()) {
       const v = this.carVis(car, game.myCar);
@@ -491,21 +357,26 @@ export class Scene {
       v.flat = lerp(v.flat, car.squashT > 0 ? 0.28 : 1, k);
       const wide = v.scale * (1 + (1 - v.flat) * 0.5);
       v.body.scale.set(wide, v.scale * v.flat, wide);
-      // A little body roll into corners and nose-up in the air.
-      const sp = Math.hypot(car.vx, car.vz);
-      v.roll = lerp(v.roll, car.steer * Math.min(1, sp / 20) * 0.09, k);
+      // A little body roll into corners and nose-up in the air. Helicopters hang
+      // above the surface (a flattened one is knocked down) and bank; boats bob and lean.
+      const sp = Math.hypot(car.vx, car.vz), ud = v.body.userData;
+      const up = V.hover * clamp((v.flat - 0.28) / 0.72, 0, 1);
+      v.body.position.y = up + (V.hover ? Math.sin(this.t * 3 + car.id) * 0.12 : ud.bob ? Math.sin(this.t * 4 + car.id * 1.7) * 0.05 : 0);
+      v.roll = lerp(v.roll, car.steer * Math.min(1, sp / 20) * (V.hover ? 0.3 : ud.bob ? 0.2 : 0.09), k);
       v.body.rotation.z = v.roll;
-      v.body.rotation.x = car.fallT > 0 ? car.spin * 0.7 : -clamp(y * 0.12, 0, 0.3);
-      const wheels = v.body.userData.wheels;
-      if (wheels) { wheels[0].rotation.y = wheels[1].rotation.y = -car.steer * 0.45; }
+      v.body.rotation.x = car.fallT > 0 ? car.spin * 0.7 : V.hover ? 0.16 * Math.min(1, sp / V.maxSpeed) : -clamp(y * 0.12, 0, 0.3);
+      if (ud.wheels) { ud.wheels[0].rotation.y = ud.wheels[1].rotation.y = -car.steer * 0.45; }
+      if (ud.turret) ud.turret.rotation.y = lerp(ud.turret.rotation.y, -car.steer * 0.5, k);
+      if (ud.spin) for (const s of ud.spin) s.o.rotation[s.axis] += s.rate * dt;
       if (car.shieldT > 0 && !v.shield) { v.shield = buildShield(); v.group.add(v.shield); }
       if (v.shield) {
         v.shield.visible = car.shieldT > 0;
         const pulse = 1 + Math.sin(this.t * 9) * 0.05;
         v.shield.scale.setScalar(pulse * v.scale);
+        v.shield.position.y = up;
       }
-      if (v.tag) v.tag.visible = car.fallT <= 0;
-      const lift = clamp(1 - y / 9, 0.35, 1) * v.scale;
+      if (v.tag) { v.tag.visible = car.fallT <= 0; v.tag.position.y = 2.2 + up; }
+      const lift = clamp(1 - (y + up) / 9, 0.35, 1) * v.scale;
       v.blob.position.set(x, 0.09, z);
       v.blob.scale.set(1.05 * lift, 1, 1.3 * lift);
       v.blob.rotation.y = h;
@@ -522,8 +393,14 @@ export class Scene {
     else for (const v of this.cars.values()) { v.group.visible = false; v.blob.visible = false; }
     for (const mo of this.movers) {
       const { mv } = mo;
-      mo.holder.position.set(mv.x, 0, mv.z);
-      if (mo.rolls) {
+      mo.holder.position.set(mv.x, mv.y, mv.z);
+      mo.holder.visible = !mv.hidden;
+      if (mo.pop) {
+        const flying = !mv.hidden && mv.fly < 1;
+        mo.roll.rotation.x = mv.fly * Math.PI * 4;
+        mo.mark.material.opacity = flying ? 0.55 + 0.4 * Math.sin(t * 30) : 0.2;
+        mo.mark.scale.setScalar(flying ? 2.2 - mv.fly * 1.2 : 1);
+      } else if (mo.rolls) {
         const dx = mv.x - mo.lx, dz = mv.z - mo.lz, dist = Math.hypot(dx, dz);
         if (dist > 1e-4) mo.roll.rotateOnWorldAxis(new THREE.Vector3(dz / dist, 0, -dx / dist), dist / mv.r);
       } else mo.holder.rotation.y = mv.h;

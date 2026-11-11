@@ -17,7 +17,6 @@ import { store, isTouch, recordPb, fmtTime, ordinal } from './store.js';
 import { TRACKS } from '../shared/tracks.js';
 import { getWorld } from '../shared/world.js';
 import { ITEMS } from '../shared/items.js';
-import { P } from '../shared/physics.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const $ = (id) => document.getElementById(id);
@@ -325,7 +324,7 @@ function sounds(s, game) {
   for (const { car, d } of near.slice(0, 6)) {
     const own = car === mine;
     audio.engine(car.id, {
-      speed: Math.hypot(car.vx, car.vz) / P.maxSpeed, boost: car.boostT > 0, own,
+      speed: Math.hypot(car.vx, car.vz) / game.world.veh.maxSpeed, boost: car.boostT > 0, own,
       pan: clamp((car.x - f.x) / 40, -0.8, 0.8), vol: own ? 1 : big ? 0.5 : (1 - d / 70) ** 1.5,
     });
   }

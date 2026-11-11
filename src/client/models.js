@@ -1,5 +1,5 @@
 // Procedural low-poly meshes for the game: every prop in shared/props.js, the
-// cars and the pickups. Primitives only (no textures), so it also loads in Node.
+// cars, boats, tanks and helicopters, and the pickups. Primitives only (no textures), so it also loads in Node.
 // Materials and geometries are cached and shared, so clone a material before
 // changing it. Car paint and boost pad chevrons are the exceptions: one per copy.
 
@@ -745,9 +745,73 @@ const BUILDERS = {
     for (const s of [-1, 1]) for (const z of [-1, 1]) add(g, box(0.1, 0.9, 0.9), glass, s * 2.22, 1.8, z);
     return g;
   },
+
+  toaster() {
+    // Chrome two-slice toaster, slots along X, lever on the +X end.
+    const g = new THREE.Group(), chrome = mat('#d9dde3', { gloss: 90 }), dark = mat('#23232b'), red = mat('#e63946');
+    add(g, rounded(9.2, 5.6, 1.3, 0.5), dark);
+    add(g, rounded(9, 5.4, 1.3, 6.2), chrome, 0, 0.5);
+    for (const z of [-1.1, 1.1]) lay(g, rounded(6.4, 1, 0.3), mat('#16151c', { decal: 1 }), 0, 6.72, z);
+    add(g, box(0.3, 2.6, 0.5), dark, 4.52, 4.3, 0);
+    add(g, box(0.9, 0.5, 1.6), red, 4.9, 5.3, 0);
+    add(g, cyl(0.6, 0.6, 0.3, 10), red, 4.55, 2, 1.5, 0, 0, HALF);
+    return g;
+  },
+
+  toastPop() {
+    // The slice that flies out of the toaster: well done, lying flat where it lands.
+    const g = new THREE.Group();
+    add(g, toastSlice(), [mat('#c98a3c'), mat('#7a4416')]);
+    for (const x of [-1.5, 0, 1.5]) sized(lay(g, quad(), mat('#8a5220', { decal: 1 }), x, 0.81, 0), 0.4, 1, 4.6);
+    return g;
+  },
+
+  cerealO({ color = '#e0a94a' } = {}) {
+    const g = new THREE.Group();
+    add(g, torus(0.6, 0.26, 5, 10), mat(color), 0, 0.26, 0, HALF);
+    return g;
+  },
+
+  cerealTrail() {
+    // Spilt cereal marking the way across the table.
+    const g = new THREE.Group();
+    hoops(g, 23, 9, 2.8, 0.2, 0.3);
+    scatter(g, 5, 10, 3, (r) => [0.2 + r() * 0.2, 0.1, 0.2 + r() * 0.2], ['#e0a94a', '#c98a3c']);
+    return g;
+  },
+
+  ruler() {
+    // A ruler propped on a rubber at the +Z end: drive up it and off the end.
+    const g = new THREE.Group(), a = Math.atan2(1.3, 8.4), len = Math.hypot(1.3, 8.4), ink = mat(INK, { decal: 1 });
+    add(g, wedge(5.2, 8.4, 1.3), mat('#ffd23f'));
+    const tilt = new THREE.Group();
+    tilt.position.set(0, 0, -4.2);
+    tilt.rotation.x = -a;
+    g.add(tilt);
+    for (let i = 0; i < 16; i++) sized(lay(tilt, quad(), ink, 2.6 - (i % 4 ? 0.35 : 0.6), 0.02, 0.4 + i * 0.5), i % 4 ? 0.7 : 1.2, 1, 0.08);
+    add(g, box(3.2, 1.25, 1.2), mat('#ff8fab'), 0, 0.63, 4.4);
+    return g;
+  },
 };
 
 export const MODEL_NAMES = Object.keys(BUILDERS);
+
+// The parts the builders above are made from, for rooms that bring their own
+// props (client/rooms/<id>.js). Geometries and materials from here are shared.
+export const kit = {
+  THREE, TAU, HALF, INK, WHITE, CREAM, STEEL, GOLD, HOOPS, memo, geos, rand,
+  box, cyl, sphere, torus, disc, ring, quad, lathe, plan, slab, side, wedge, gable, rounded, blobGeo, star,
+  mat, shade, pale, contrast, add, lay, sized, glyph, scatter, hoops, toastSlice,
+};
+
+// Adds a room's own builders: { name: (opts) => THREE.Group }.
+export function registerModels(models) {
+  for (const [name, make] of Object.entries(models)) {
+    if (BUILDERS[name]) throw new Error(`model ${name} is defined twice`);
+    BUILDERS[name] = make;
+    MODEL_NAMES.push(name);
+  }
+}
 
 export function buildProp(name, opts = {}) {
   const make = BUILDERS[name];
@@ -855,18 +919,214 @@ const CARS = [
   },
 ];
 
-export function buildCar(color, variant = 0) {
-  const g = new THREE.Group();
-  // Paint and trim belong to this car alone so setColor doesn't recolour the field.
+// ---- boats, tanks and helicopters ------------------------------------------------
+// Same footprint as a car and the same parts bag. A car hands back its wheels;
+// these hand back what the scene should animate: { bob } for a boat, { turret }
+// for a tank, { spin: [{ o, axis, rate }] } for rotors.
+
+const HULL = [[-0.5, -0.95], [0.5, -0.95], [0.56, 0.15], [0.34, 0.7], [0, 1], [-0.34, 0.7], [-0.56, 0.15]];
+const hull = () => memo(geos, 'boatHull', () => slab(plan(HULL), 0.34));
+const deck = () => memo(geos, 'boatDeck', () => slab(plan(HULL.map(([x, z]) => [x * 0.8, z * 0.86 - 0.03]))));
+
+const BOATS = [
+  // Speedboat: windscreen, driver, outboard motor.
+  ({ g, paint, trim, glass, dark, lamp }) => {
+    add(g, hull(), paint);
+    lay(g, deck(), trim, 0, 0.35);
+    add(g, box(0.62, 0.05, 0.6), dark, 0, 0.37, -0.25);
+    add(g, box(0.7, 0.22, 0.04), glass, 0, 0.5, 0.2, -0.5);
+    add(g, sphere(0.13, 8, 6), paint, 0, 0.55, -0.15);
+    add(g, box(0.24, 0.3, 0.2), dark, 0, 0.42, -1.02);
+    add(g, box(0.12, 0.05, 0.06), lamp, 0, 0.37, 0.86);
+    return { bob: true };
+  },
+  // Tug: wheelhouse, funnel, tyres over the side.
+  ({ g, paint, trim, glass, dark }) => {
+    add(g, hull(), paint);
+    lay(g, deck(), mat('#8b5a2b'), 0, 0.35);
+    add(g, box(0.6, 0.4, 0.55), trim, 0, 0.55, 0.1);
+    add(g, box(0.62, 0.14, 0.03), glass, 0, 0.62, 0.385);
+    add(g, box(0.72, 0.05, 0.67), paint, 0, 0.78, 0.1);
+    add(g, cyl(0.12, 0.12, 0.45, 8), paint, 0, 0.58, -0.5);
+    add(g, cyl(0.125, 0.125, 0.09, 8), dark, 0, 0.76, -0.5);
+    for (const s of [-1, 1]) for (const z of [-0.45, 0.05]) add(g, torus(0.11, 0.05, 4, 8), mat(INK), s * 0.55, 0.26, z, 0, HALF);
+    return { bob: true };
+  },
+  // Sailing boat: mast, mainsail and jib.
+  ({ g, paint, trim, dark }) => {
+    add(g, hull(), paint);
+    lay(g, deck(), mat(CREAM), 0, 0.35);
+    add(g, cyl(0.035, 0.035, 1.25, 6), dark, 0, 0.97, 0.1);
+    add(g, side('sailMain', [[0.04, 0.5], [-0.8, 0.5], [0.04, 1.55]], 0.03), mat(WHITE));
+    add(g, side('sailJib', [[0.16, 0.48], [0.88, 0.42], [0.16, 1.3]], 0.03), trim);
+    add(g, box(0.03, 0.12, 0.26), paint, 0, 1.55, -0.04);
+    add(g, box(0.04, 0.04, 0.34), dark, 0, 0.42, -0.74);
+    return { bob: true };
+  },
+  // Rubber duck.
+  ({ g, paint, trim }) => {
+    sized(add(g, sphere(0.5, 10, 8), paint, 0, 0.32, -0.1), 1, 0.64, 1.5);
+    add(g, cyl(0, 0.2, 0.34, 6), paint, 0, 0.52, -0.78, -0.7);
+    add(g, sphere(0.3, 10, 8), paint, 0, 0.8, 0.42);
+    add(g, box(0.22, 0.07, 0.24), mat('#ff9f1c'), 0, 0.76, 0.74);
+    for (const s of [-1, 1]) {
+      add(g, sphere(0.05, 6, 4), mat(INK), s * 0.14, 0.9, 0.64);
+      sized(add(g, sphere(0.26, 8, 6), trim, s * 0.46, 0.38, -0.12), 0.3, 0.6, 1.1);
+    }
+    return { bob: true };
+  },
+];
+
+// Tracks and hull shared by every tank; the turret sits on a pivot at the back.
+function tankBase({ g, paint, lamp, tail }) {
+  const tread = mat('#2b2b33'), hub = mat('#7a7f87');
+  for (const s of [-1, 1]) {
+    add(g, box(0.26, 0.34, 1.6), tread, s * 0.44, 0.17, 0);
+    for (const z of [-0.8, 0.8]) add(g, cyl(0.17, 0.17, 0.26, 8), tread, s * 0.44, 0.17, z, 0, 0, HALF);
+    for (const z of [-0.6, -0.2, 0.2, 0.6]) add(g, cyl(0.1, 0.1, 0.28, 6), hub, s * 0.44, 0.15, z, 0, 0, HALF);
+    add(g, box(0.1, 0.06, 0.04), lamp, s * 0.2, 0.42, 0.9);
+    add(g, box(0.1, 0.05, 0.03), tail, s * 0.2, 0.42, -0.91);
+  }
+  add(g, side('tankHull', [[-0.9, 0.2], [0.8, 0.2], [0.98, 0.32], [0.6, 0.52], [-0.9, 0.52]], 0.64), paint);
+  const turret = new THREE.Group();
+  turret.position.set(0, 0.52, -0.12);
+  g.add(turret);
+  return turret;
+}
+const barrel = (t, mats, x, len, r = 0.055) => {
+  add(t, cyl(r, r, len, 6), mats.trim, x, 0.13, 0.28 + len / 2, HALF);
+  add(t, cyl(r + 0.03, r + 0.03, 0.14, 6), mats.dark, x, 0.13, 0.28 + len, HALF);
+};
+
+const TANKS = [
+  // Round turret, long gun.
+  (m) => {
+    const t = tankBase(m);
+    add(t, cyl(0.3, 0.36, 0.24, 8), m.paint, 0, 0.12, 0);
+    add(t, cyl(0.12, 0.12, 0.04, 8), m.trim, 0.1, 0.26, -0.08);
+    barrel(t, m, 0, 0.85);
+    return { turret: t };
+  },
+  // Square turret, twin guns and an aerial.
+  (m) => {
+    const t = tankBase(m);
+    add(t, box(0.62, 0.24, 0.66), m.paint, 0, 0.12, 0);
+    add(t, box(0.3, 0.02, 0.3), m.trim, 0, 0.25, -0.05);
+    for (const s of [-1, 1]) barrel(t, m, s * 0.13, 0.65, 0.045);
+    add(t, cyl(0.012, 0.012, 0.5, 4), m.dark, -0.24, 0.48, -0.26);
+    return { turret: t };
+  },
+  // Dome turret, short fat gun.
+  (m) => {
+    const t = tankBase(m);
+    sized(add(t, sphere(0.34, 8, 6), m.paint, 0, 0.06, 0), 1, 0.75, 1);
+    add(t, cyl(0.35, 0.35, 0.05, 8), m.trim, 0, 0.03, 0);
+    barrel(t, m, 0, 0.5, 0.085);
+    return { turret: t };
+  },
+  // Rocket launcher on a flat bed.
+  (m) => {
+    const t = tankBase(m);
+    add(t, box(0.5, 0.12, 0.5), m.paint, 0, 0.06, 0);
+    const pod = new THREE.Group();
+    pod.position.set(0, 0.26, 0.05);
+    pod.rotation.x = -0.25;
+    t.add(pod);
+    add(pod, box(0.62, 0.24, 0.8), m.trim);
+    add(pod, box(0.54, 0.16, 0.02), m.dark, 0, 0, 0.41);
+    for (const s of [-1, 1]) add(pod, cyl(0.05, 0.05, 0.03, 6), m.tail, s * 0.14, 0, 0.425, HALF);
+    return { turret: t };
+  },
+];
+
+// A rotor on its own pivot: two blades and a faint disc for the blur.
+function rotor(parent, r, x, y, z, dark) {
+  const p = new THREE.Group();
+  p.position.set(x, y, z);
+  parent.add(p);
+  for (const a of [0, HALF]) add(p, box(r * 2, 0.03, r * 0.12), dark, 0, 0, 0, 0, a);
+  lay(p, disc(r, 16), mat('#dfe8f0', { see: 0.16 }), 0, 0.02);
+  return p;
+}
+function chopper({ g, paint, trim, glass, dark, lamp, tail }, floats) {
+  for (const s of [-1, 1]) {
+    if (floats) add(g, cyl(0.1, 0.1, 1.3, 8), mat(WHITE), s * 0.36, 0.1, 0.15, HALF);
+    else add(g, box(0.05, 0.05, 1.3), dark, s * 0.34, 0.03, 0.15);
+    for (const z of [0.5, -0.2]) add(g, box(0.04, 0.3, 0.04), dark, s * 0.3, 0.2, z);
+  }
+  sized(add(g, sphere(0.42, 10, 8), paint, 0, 0.6, 0.2), 0.95, 0.9, 1.3);
+  sized(add(g, sphere(0.34, 10, 8), glass, 0, 0.6, 0.52), 0.95, 0.85, 1);
+  add(g, box(0.13, 0.13, 1), paint, 0, 0.68, -0.75);
+  add(g, box(floats ? 0.6 : 0.04, floats ? 0.04 : 0.4, 0.24), trim, 0, floats ? 0.76 : 0.82, -1.2);
+  add(g, box(0.1, 0.05, 0.04), lamp, 0, 0.42, 0.78);
+  add(g, box(0.06, 0.06, 0.03), tail, 0, 0.68, -1.26);
+  add(g, cyl(0.04, 0.04, 0.22, 6), dark, 0, 1.06, 0.15);
+  const back = new THREE.Group();
+  back.position.set(0.1, 0.72, -1.2);
+  g.add(back);
+  add(back, box(0.02, 0.5, 0.07), dark);
+  return { spin: [{ o: rotor(g, 1.15, 0, 1.17, 0.15, dark), axis: 'y', rate: 34 }, { o: back, axis: 'x', rate: 46 }] };
+}
+
+const HELIS = [
+  (m) => chopper(m, false),
+  // Twin rotor transport.
+  ({ g, paint, trim, glass, dark, lamp, tail }) => {
+    add(g, box(0.62, 0.42, 1.8), paint, 0, 0.45, 0);
+    add(g, box(0.5, 0.2, 0.04), glass, 0, 0.52, 0.91);
+    add(g, box(0.3, 0.02, 1.1), trim, 0, 0.67, 0);
+    for (const s of [-1, 1]) {
+      add(g, box(0.02, 0.12, 1.2), glass, s * 0.32, 0.52, 0);
+      for (const z of [0.6, -0.6]) add(g, cyl(0.1, 0.1, 0.1, 8), dark, s * 0.3, 0.1, z, 0, 0, HALF);
+      add(g, box(0.1, 0.05, 0.04), lamp, s * 0.2, 0.32, 0.91);
+      add(g, box(0.1, 0.05, 0.03), tail, s * 0.2, 0.32, -0.91);
+    }
+    const spin = [-1, 1].map((s) => {
+      add(g, box(0.3, 0.3, 0.36), trim, 0, 0.8, s * 0.6);
+      return { o: rotor(g, 0.82, 0, 1 + (s > 0 ? 0 : 0.06), s * 0.6, dark), axis: 'y', rate: s * 34 };
+    });
+    return { spin };
+  },
+  // Rescue chopper on floats, with a T tail.
+  (m) => chopper(m, true),
+  // Quadcopter.
+  ({ g, paint, trim, glass, dark, lamp, tail }) => {
+    add(g, box(0.5, 0.2, 0.74), paint, 0, 0.36, 0);
+    add(g, sphere(0.12, 8, 6), glass, 0, 0.26, 0.38);
+    add(g, box(0.2, 0.04, 0.05), lamp, 0, 0.4, 0.38);
+    add(g, box(0.2, 0.04, 0.04), tail, 0, 0.4, -0.38);
+    for (const s of [-1, 1]) {
+      add(g, box(1.6, 0.06, 0.1), dark, 0, 0.42, 0, 0, s * Math.PI / 4);
+      add(g, box(0.04, 0.04, 0.8), dark, s * 0.22, 0.03, 0);
+      for (const z of [0.25, -0.25]) add(g, box(0.04, 0.26, 0.04), dark, s * 0.22, 0.16, z);
+    }
+    const spin = [];
+    for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+      add(g, cyl(0.07, 0.07, 0.14, 6), trim, sx * 0.56, 0.47, sz * 0.56);
+      spin.push({ o: rotor(g, 0.44, sx * 0.56, 0.56, sz * 0.56, dark), axis: 'y', rate: sx * sz * 40 });
+    }
+    return { spin };
+  },
+];
+
+const KINDS = { car: CARS, boat: BOATS, tank: TANKS, heli: HELIS };
+
+// kind: car | boat | tank | heli (see shared/vehicles.js); variant picks one of four.
+export function buildVehicle(kind, color, variant = 0) {
+  const g = new THREE.Group(), makers = KINDS[kind] || CARS;
+  // Paint and trim belong to this vehicle alone so setColor doesn't recolour the field.
   const paint = new THREE.MeshLambertMaterial({ color, flatShading: true });
   const trim = new THREE.MeshLambertMaterial({ color: contrast(color), flatShading: true });
-  g.userData.wheels = CARS[((variant % 4) + 4) % 4]({
+  const out = makers[((variant % makers.length) + makers.length) % makers.length]({
     g, paint, trim, glass: mat('#1d2633', { gloss: 80 }), dark: mat('#23232b'),
     lamp: mat('#fff4c2', { glow: 0.8 }), tail: mat('#ff3b3b', { glow: 0.6 }),
   });
+  if (Array.isArray(out)) g.userData.wheels = out;
+  else Object.assign(g.userData, out);
   g.userData.setColor = (css) => { paint.color.set(css); trim.color.set(contrast(css)); };
   return g;
 }
+export const buildCar = (color, variant = 0) => buildVehicle('car', color, variant);
 
 // ---- pickups ----------------------------------------------------------------------
 

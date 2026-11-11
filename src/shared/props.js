@@ -1,5 +1,6 @@
 // Prop catalogue: what each named model does to a car. The renderer has a mesh
-// builder for every name here (client/themes.js); this side only knows shapes.
+// builder for every name here (client/models.js and client/rooms/); this side
+// only knows shapes. A room adds its own props through `shapes` in its module.
 //   circle {r}            solid, round
 //   box {hw, hd}          solid, half extents before rotation
 //   zone {kind, r|hw,hd}  slick | sticky | hole | jump
@@ -24,6 +25,10 @@ export const PROPS = {
   milkPuddle: { shape: 'zone', kind: 'slick', r: 5 },
   jamBlob: { shape: 'zone', kind: 'sticky', r: 3.6 },
   crumbs: { shape: 'none' },
+  toaster: { shape: 'box', hw: 4.6, hd: 2.8 },
+  toastPop: { shape: 'circle', r: 2.7 },
+  cerealO: { shape: 'circle', r: 0.8, low: true },
+  cerealTrail: { shape: 'none' },
 
   // Snooker table
   ball: { shape: 'circle', r: 2 },
@@ -61,4 +66,7 @@ export const PROPS = {
   toyTrain: { shape: 'circle', r: 2.4 },
   pond: { shape: 'zone', kind: 'sticky', r: 5 },
   house: { shape: 'box', hw: 2.5, hd: 2.5 },
+
+  // Anywhere
+  ruler: { shape: 'zone', kind: 'jump', hw: 2.6, hd: 4.2 },
 };
