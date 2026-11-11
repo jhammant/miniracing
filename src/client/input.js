@@ -1,9 +1,9 @@
 // Driving input from keyboard, touch buttons and gamepads, merged into one
-// { steer, throttle, brake } reading plus an "item" tap.
+// { steer, throttle, brake } reading plus "item" and "horn" taps.
 
 const keys = new Set();
 const touch = { left: false, right: false, brake: false };
-let itemTaps = 0, pauseTaps = 0, padItemHeld = false;
+let itemTaps = 0, pauseTaps = 0, hornTaps = 0, padItemHeld = false, padHornHeld = false;
 
 const KEYMAP = {
   ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
@@ -16,6 +16,7 @@ export function initInput(root) {
     if (e.target instanceof HTMLInputElement) return;
     if (KEYMAP[e.code]) { keys.add(KEYMAP[e.code]); e.preventDefault(); }
     else if (ITEM_KEYS.has(e.code) && !e.repeat) { itemTaps++; e.preventDefault(); }
+    else if (e.code === 'KeyH' && !e.repeat) hornTaps++;
     else if ((e.code === 'Escape' || e.code === 'KeyP') && !e.repeat) pauseTaps++;
   });
   addEventListener('keyup', (e) => keys.delete(KEYMAP[e.code]));
@@ -24,11 +25,13 @@ export function initInput(root) {
   root.innerHTML = `
     <div class="steer" data-pad="steer"><span class="arrow l">◀</span><span class="arrow r">▶</span></div>
     <div class="tb brake" data-pad="brake">BRAKE</div>
-    <div class="tb item" data-pad="item"><span class="glyph"></span></div>`;
+    <div class="tb item" data-pad="item"><span class="glyph"></span></div>
+    <div class="tb horn" data-pad="horn">HORN</div>`;
   bindPad(root, {
     steer: (dir) => { touch.left = dir < 0; touch.right = dir > 0; },
     brake: (on) => { touch.brake = on; },
     item: () => { itemTaps++; },
+    horn: () => { hornTaps++; },
   });
 }
 
@@ -71,7 +74,7 @@ function fitToView() {
 
 // Touch pad wiring, shared with the phone-controller page. `steer` gets -1/0/1
 // from which half of the pad the finger is on, so sliding across flips sides.
-export function bindPad(root, { steer, brake, item }) {
+export function bindPad(root, { steer, brake, item, horn }) {
   const steerEl = root.querySelector('[data-pad=steer]'), brakeEl = root.querySelector('[data-pad=brake]'), itemEl = root.querySelector('[data-pad=item]');
   const fingers = new Map();
   const update = () => {
@@ -91,6 +94,7 @@ export function bindPad(root, { steer, brake, item }) {
   };
   hold(brakeEl, brake);
   hold(itemEl, (on) => { if (on) item(); });
+  hold(root.querySelector('[data-pad=horn]'), (on) => { if (on) horn(); });
   root.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
@@ -108,6 +112,9 @@ export function readInput(autoGas, out) {
     const held = b(2) > 0.5 || b(3) > 0.5 || b(5) > 0.5;
     if (held && !padItemHeld) itemTaps++;
     padItemHeld = held;
+    const honk = b(4) > 0.5 || b(10) > 0.5;
+    if (honk && !padHornHeld) hornTaps++;
+    padHornHeld = honk;
     if (b(9) > 0.5 && !gp.pauseHeld) pauseTaps++;
     gp.pauseHeld = b(9) > 0.5;
     break;
@@ -119,4 +126,5 @@ export function readInput(autoGas, out) {
 }
 
 export function takeItemTap() { const n = itemTaps; itemTaps = 0; return n > 0; }
+export function takeHornTap() { const n = hornTaps; hornTaps = 0; return n > 0; }
 export function takePauseTap() { const n = pauseTaps; pauseTaps = 0; return n > 0; }

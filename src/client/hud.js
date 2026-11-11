@@ -3,9 +3,13 @@
 // touched when their value changes.
 
 import { ITEMS } from '../shared/items.js';
+import { LIGHTS, CUP } from '../shared/room.js';
 import { store, fmtTime, ordinal, esc } from './store.js';
 
 const put = (el, text) => { if (el._t !== text) { el._t = text; el.textContent = text; } };
+const html = (el, h) => { if (el._h !== h) { el._h = h; el.innerHTML = h; } };
+// A row of lamps, `lit` of them on: the eight lights, or the lives left in a cup.
+export const lamps = (lit, total) => '<i class="on"></i>'.repeat(Math.max(0, Math.min(total, lit))) + '<i></i>'.repeat(Math.max(0, total - Math.max(0, lit)));
 const flag = (el, name, on) => { if (el[`_${name}`] !== on) { el[`_${name}`] = on; el.classList.toggle(name, on); } };
 
 export class Hud {
@@ -13,7 +17,7 @@ export class Hud {
     this.root = root; this.touchRoot = touchRoot;
     root.innerHTML = `
       <div class="vignette"></div>
-      <div class="tl"><div class="pos"><b></b><sup></sup><span></span></div><div class="lap"></div><div class="pips"></div></div>
+      <div class="tl"><div class="pos"><b></b><sup></sup><span></span></div><div class="lap"></div><div class="pips"></div><div class="sub"></div></div>
       <div class="tr"><div class="time"></div><div class="best"></div><canvas class="map"></canvas></div>
       <ol class="standings"></ol>
       <button class="menu-btn" aria-label="Pause menu">II</button>
@@ -26,12 +30,13 @@ export class Hud {
       <div class="joinhint"></div>`;
     const q = (s) => root.querySelector(s);
     this.el = {
-      vignette: q('.vignette'), tl: q('.tl'), posN: q('.pos b'), posS: q('.pos sup'), posOf: q('.pos span'), lap: q('.lap'), pips: q('.pips'),
+      vignette: q('.vignette'), tl: q('.tl'), posN: q('.pos b'), posS: q('.pos sup'), posOf: q('.pos span'), lap: q('.lap'), pips: q('.pips'), sub: q('.sub'),
       time: q('.time'), best: q('.best'), map: q('.map'), standings: q('.standings'), slot: q('.slot'), slotGlyph: q('.slot .glyph'), slotName: q('.slot small'),
       wrong: q('.wrong'), watch: q('.watch'), count: q('.count'), toasts: q('.toasts'), banner: q('.banner'), bannerT: q('.banner b'), bannerS: q('.banner span'),
       join: q('.joinhint'), padGlyph: touchRoot.querySelector('.item .glyph'), padItem: touchRoot.querySelector('.item'),
     };
     q('.menu-btn').addEventListener('click', onMenu);
+    this.note = ''; // a line under the lap counter that main.js sets: the ghost you are chasing
     this.kind = null; this.goT = 0; this.listT = 0; this.mapT = 0; this.danger = 0;
   }
 
@@ -100,15 +105,15 @@ export class Hud {
 
     if (f && this.kind === 'race') {
       put(el.posN, String(f.pos)); put(el.posS, ordinal(f.pos).slice(-2)); put(el.posOf, `/${game.order.length}`);
-      put(el.lap, elim ? `ROUND ${race.round}` : `LAP ${Math.min(race.laps, f.laps + 1)}/${race.laps}`);
-      if (elim) {
-        const pips = '●'.repeat(f.wins || 0) + '○'.repeat(Math.max(0, race.laps - (f.wins || 0)));
-        put(el.pips, pips);
-      } else put(el.pips, '');
+      put(el.lap, elim ? `ROUND ${race.round}/${race.laps}` : race.trial ? `LAP ${f.laps + 1}` : `LAP ${Math.min(race.laps, f.laps + 1)}/${race.laps}`);
+      html(el.pips, elim ? lamps(f.lights ?? LIGHTS.start, LIGHTS.total) : race.cup ? lamps(f.lives ?? CUP.lives, CUP.lives) : '');
+      flag(el.pips, 'lives', !!race.cup);
+    flag(this.root, 'alone', !!race.trial);
+      put(el.sub, race.cup ? `ROOM ${race.cup.i + 1}/${race.cup.n}` : race.trial ? this.note : '');
       const lapMs = own && game.started && !f.finished ? (game.raceT - f.lapStart) * 1000 : f.finished ? f.lastLap : 0;
       put(el.time, elim ? '' : fmtTime(Math.max(0, lapMs)));
       const pb = store.pbs[race.track];
-      put(el.best, elim ? `FIRST TO ${race.laps}` : f.best ? `BEST ${fmtTime(f.best)}` : pb ? `PB ${fmtTime(pb)}` : '');
+      put(el.best, elim ? `ALL ${LIGHTS.total} LIGHTS WINS` : f.best ? `BEST ${fmtTime(f.best)}` : pb ? `PB ${fmtTime(pb)}` : '');
     }
 
     // Item slot: on phones the item button itself shows what you hold.
@@ -139,15 +144,15 @@ export class Hud {
 
   standings(game, elim) {
     const lead = game.order[0];
-    let html = '';
+    let list = '';
     for (const car of game.order) {
       let note = '';
-      if (elim) note = car.out ? 'OUT' : '★'.repeat(car.wins || 0);
+      if (elim) note = car.out ? 'OUT' : `${car.lights ?? LIGHTS.start}●`;
       else if (car.finished) note = fmtTime(car.finTime);
       else if (car !== lead && lead && game.started) note = `+${Math.max(0, (lead.total - car.total) / 30).toFixed(1)}`;
-      html += `<li class="${car.id === game.myCar ? 'me ' : ''}${car.out ? 'out ' : ''}${car.finished ? 'fin' : ''}"><i style="background:${esc(car.color)}"></i><span>${esc(car.name)}</span><em>${esc(note)}</em></li>`;
+      list += `<li class="${car.id === game.myCar ? 'me ' : ''}${car.out ? 'out ' : ''}${car.finished ? 'fin' : ''}"><i style="background:${esc(car.color)}"></i><span>${esc(car.name)}</span><em>${esc(note)}</em></li>`;
     }
-    if (this.el.standings._h !== html) { this.el.standings._h = html; this.el.standings.innerHTML = html; }
+    html(this.el.standings, list);
   }
 
   drawMap(game) {

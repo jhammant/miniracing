@@ -53,6 +53,35 @@ test('lap records: sane laps are kept, cheats and junk are not, names are cleane
   assert.equal(JSON.parse(readFileSync(join(dir, 'records.json'), 'utf8')).breakfast.length, 2);
 });
 
+test('ghosts: the quickest sound lap is kept and served; slower ones, junk and oversized ones are not', async () => {
+  // Arrange
+  const post = (body) => fetch(`${base}/api/ghost`, { method: 'POST', body: JSON.stringify(body) }).then((r) => r.json());
+  const get = () => fetch(`${base}/api/ghost?track=breakfast`);
+  const lap = (ms, fill = (i) => [i, -i, 0, 0]) => Array.from({ length: Math.floor(ms / 100) + 1 }, (_, i) => fill(i)).flat();
+  // Assert: nothing to start with
+  assert.equal((await get()).status, 404);
+  // Act + assert: junk first, none of which is kept
+  assert.equal((await post({ track: 'breakfast', name: 'A', ms: 15000, d: lap(15000).slice(0, 80) })).kept, false);
+  assert.equal((await post({ track: 'breakfast', name: 'A', ms: 15000, d: lap(15000, () => [0.5, 0, 0, 0]) })).kept, false);
+  assert.equal((await post({ track: 'breakfast', name: 'A', ms: 15000, d: lap(15000, () => [999999, 0, 0, 0]) })).kept, false);
+  assert.equal((await post({ track: 'breakfast', name: 'A', ms: 15000, d: lap(15000, () => ['<b>', 0, 0, 0]) })).kept, false);
+  assert.equal((await post({ track: 'breakfast', name: 'A', ms: 100, d: lap(100) })).kept, false);
+  assert.equal((await post({ track: '__proto__', name: 'A', ms: 15000, d: lap(15000) })).kept, false);
+  assert.equal((await get()).status, 404);
+  const big = await fetch(`${base}/api/ghost`, { method: 'POST', body: JSON.stringify({ track: 'breakfast', name: 'A', ms: 15000, d: lap(15000, () => Array(60).fill(100000)) }) }).then((r) => r.status, () => 'dropped');
+  assert.ok(big === 413 || big === 'dropped');
+  // Act: a good lap, a slower one, then a quicker one
+  assert.equal((await post({ track: 'breakfast', name: '<i>Ann', ms: 15000, d: lap(15000) })).kept, true);
+  assert.equal((await post({ track: 'breakfast', name: 'Bob', ms: 16000, d: lap(16000) })).kept, false);
+  assert.equal((await post({ track: 'breakfast', name: 'Cy', ms: 14000.4, d: lap(14000) })).kept, true);
+  // Assert
+  const held = await (await get()).json();
+  assert.deepEqual([held.name, held.ms, held.d.length], ['CY', 14000, 141 * 4]);
+  assert.equal((await fetch(`${base}/api/ghost?track=nowhere`)).status, 404);
+  s.ghosts.save();
+  assert.equal(JSON.parse(readFileSync(join(dir, 'ghosts.json'), 'utf8')).breakfast.name, 'CY');
+});
+
 test('a WebSocket from another site is refused', async () => {
   await assert.rejects(client('https://evil.example').open());
 });

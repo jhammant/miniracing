@@ -11,10 +11,13 @@ import { UI } from './ui.js';
 import { Pad } from './pad.js';
 import { Game } from './game.js';
 import { WsConn, LocalConn } from './net.js';
-import { initInput, stopZoom, readInput, takeItemTap, takePauseTap } from './input.js';
+import { initInput, stopZoom, readInput, takeItemTap, takePauseTap, takeHornTap } from './input.js';
 import { audio } from './audio.js';
 import { store, isTouch, recordPb, fmtTime, ordinal } from './store.js';
-import { TRACKS } from '../shared/tracks.js';
+import { loadOwn, saveOwn, fetchRecord, sendGhost } from './ghost.js';
+import { TRACKS, trackById } from '../shared/tracks.js';
+import { DRIVERS } from '../shared/drivers.js';
+import { GhostRecorder, ghostAt } from '../shared/ghost.js';
 import { getWorld } from '../shared/world.js';
 import { ITEMS } from '../shared/items.js';
 
@@ -43,10 +46,12 @@ const ui = new UI($('ui'), {
   start: () => session?.conn.send({ t: 'start' }),
   toLobby: () => session?.conn.send({ t: 'lobby' }),
   set: (settings) => session?.conn.send({ t: 'set', settings }),
-  profile: () => {},
+  profile: (what) => { if (what === 'driver') audio.sfx(hornOf(store.driver)); },
   options: applyOptions,
   resume: () => {},
 });
+
+const hornOf = (driver) => `horn${DRIVERS[driver]?.horn ?? 0}`;
 
 function applyOptions() {
   scene.setOptions({ quality: store.quality, retro: store.retro });
@@ -93,6 +98,7 @@ function close() {
   s.conn.close();
   s.pad?.destroy();
   hud.show(null); hud.setJoinHint('');
+  scene.setGhost(null);
   scene.tagAll = false;
   fx.clear();
   audio.engineStopAll(); audio.skid(0);
@@ -107,7 +113,7 @@ function wire(s) {
 async function open(kind, code) {
   stopDemo();
   close();
-  const me = { name: store.name, color: store.color };
+  const me = { name: store.name, color: store.color, driver: store.driver };
   if (kind === 'solo') {
     const s = session = { kind, conn: new LocalConn(me) };
     wire(s);
@@ -241,7 +247,11 @@ function onGame(s, type, d) {
     s.count = 4; s.results = null; s.wrong = false;
     clearTimeout(s.timer);
     music('race');
-    if (!isTouch && s.me.car != null && !d.joining) hud.toast(store.autoGas ? '◀ ▶ STEER   ▼ BRAKE   SPACE POWER-UP' : '▲ GO   ◀ ▶ STEER   ▼ BRAKE   SPACE POWER-UP', '', 4200);
+    const { cup, trial, track } = game.race;
+    if (!isTouch && s.me.car != null && !d.joining) hud.toast(`${store.autoGas ? '' : '▲ GO   '}◀ ▶ STEER   ▼ BRAKE   ${trial ? '' : 'SPACE POWER-UP   '}H HORN`, '', 4200);
+    if (cup) hud.toast(`ROOM ${cup.i + 1} OF ${cup.n}: ${trackById(track).name.toUpperCase()}`, 'gold', 3200);
+    s.rec = null; s.ghost = null; hud.note = '';
+    if (trial) startTrial(s, track);
     return;
   }
   fx.on(type, d);
@@ -271,6 +281,7 @@ function onGame(s, type, d) {
       if (recordPb(game.race.track, d.ms)) hud.toast(`NEW BEST LAP ${fmtTime(d.ms)}`, 'gold');
       else hud.toast(`LAP ${fmtTime(d.ms)}`);
       if (d.final) { hud.toast('FINAL LAP!', 'big'); audio.sfx('finalLap'); } else audio.sfx(d.isBest ? 'bestLap' : 'lap');
+      if (s.rec) trialLap(s, car, d.ms);
       break;
     case 'record': hud.toast(`${d.name}: ${ordinal(d.rank)} ON THE RECORD BOARD  ${fmtTime(d.ms)}`, 'gold', 3200); audio.sfx('record'); break;
     case 'finish':
@@ -280,7 +291,11 @@ function onGame(s, type, d) {
       sfxAt(s, 'out', car, mine ? 1 : 0.5);
       if (mine) hud.banner('OUT!', 'TOO FAR BEHIND'); else if (screen) hud.toast(`${car.name} IS OUT`);
       break;
-    case 'round': hud.toast(`${car.name} WINS THE ROUND`, 'gold', 2400); audio.sfx('round'); break;
+    case 'round':
+      hud.toast(mine ? 'YOU WIN THE ROUND: ONE MORE LIGHT' : `${car.name} WINS THE ROUND${d.lost.includes(s.me.car) ? ': YOU LOSE A LIGHT' : ''}`, 'gold', 2400);
+      audio.sfx('round');
+      break;
+    case 'horn': sfxAt(s, hornOf(car.driver), car, mine ? 0.8 : 1); break;
     case 'results':
       s.results = d;
       music('results');
@@ -291,6 +306,46 @@ function onGame(s, type, d) {
     case 'bump': sfxAt(s, 'bump', car, clamp(d.data / 22, 0.15, 1)); if (mine && d.data > 14) scene.shake(0.3); break;
     default:
   }
+}
+
+// ---- time trial ------------------------------------------------------------
+
+// Which ghost to chase: your own best lap of this room, or the record holder's.
+function startTrial(s, track) {
+  s.rec = new GhostRecorder();
+  const chase = (g) => {
+    if (session !== s || s.game.race?.track !== track || !s.rec) return;
+    s.ghost = g;
+    hud.note = g ? `GHOST: ${g.name} ${fmtTime(g.ms)}` : 'NO GHOST YET: SET A LAP';
+    hud.toast(hud.note, '', 3200);
+  };
+  const own = loadOwn(track);
+  if (store.ghost === 'off') { hud.note = 'GHOST OFF'; return; }
+  if (store.ghost === 'record') fetchRecord(track).then((g) => chase(g && !(own && own.ms <= g.ms) ? g : own));
+  else chase(own);
+}
+
+// A lap of yours has been timed. Keep it if it is your best here, and offer it for the record.
+function trialLap(s, car, ms) {
+  const track = s.game.race.track, lap = s.rec.finish(track, ms), own = loadOwn(track);
+  if (!lap) return;
+  if (s.ghost && lap.ms < s.ghost.ms) hud.toast('YOU BEAT THE GHOST!', 'gold', 2600);
+  if (own && own.ms <= lap.ms) return;
+  saveOwn(track, lap);
+  sendGhost(track, car.name, lap);
+  if (store.ghost !== 'off' && (!s.ghost || lap.ms < s.ghost.ms)) {
+    s.ghost = { ...lap, name: 'YOUR BEST', own: true };
+    hud.note = `GHOST: YOUR BEST ${fmtTime(lap.ms)}`;
+  }
+}
+
+const pose = { x: 0, y: 0, z: 0, h: 0 };
+function trialFrame(s) {
+  const game = s.game, car = game?.cars.get(s.me?.car);
+  if (!s.rec || !car || !game.race?.trial || !game.started || s.room.phase === 'lobby') { scene.setGhost(null); return; }
+  const lapMs = (game.raceT - car.lapStart) * 1000;
+  s.rec.sample(car, lapMs);
+  scene.setGhost(s.ghost && ghostAt(s.ghost, lapMs, pose) ? pose : null);
 }
 
 // ---- every frame ------------------------------------------------------------
@@ -345,6 +400,8 @@ function frame(now) {
   const s = session || demo;
   let game = s?.game || null;
   if (game) game.frame(dt);
+  if (takeHornTap() && session?.game?.race && session.me.car != null && !ui.screen) session.conn.send({ t: 'horn' });
+  if (session) trialFrame(session);
   if (takePauseTap()) toggleMenu();
   if (session && ui.screen) ui.clock(session.conn.now());
   if (game && (!game.race || s.room.phase === 'lobby')) game = null; // nothing on track to show

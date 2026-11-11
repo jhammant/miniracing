@@ -10,6 +10,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { Room, MAX_CARS } from '../src/shared/room.js';
 import { Records } from './records.js';
+import { Ghosts } from './ghosts.js';
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -18,7 +19,7 @@ const TYPES = {
 };
 const CSP = "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I or O: they read as 1 and 0
-const LIMITS = { rooms: 300, perIp: 40, msgsPerSec: 90, payload: 8192, post: 512, postsPerMin: 30, idleMs: 30 * 60 * 1000 };
+const LIMITS = { rooms: 300, perIp: 40, msgsPerSec: 90, payload: 8192, post: 512, ghostPost: 32768, postsPerMin: 30, idleMs: 30 * 60 * 1000 };
 
 export function startServer({
   port = +(process.env.PORT || 8080),
@@ -27,9 +28,11 @@ export function startServer({
   origins = (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
   trustProxy = process.env.TRUST_PROXY === '1',
   recordsFile,
+  ghostsFile,
   open = true, // timings for open rooms; tests shorten them
 } = {}) {
   const records = new Records(recordsFile === undefined ? join(dataDir, 'records.json') : recordsFile);
+  const ghosts = new Ghosts(ghostsFile === undefined ? join(dataDir, 'ghosts.json') : ghostsFile);
   const rooms = new Map(), perIp = new Map(), posts = new Map();
 
   const ipOf = (req) => (trustProxy && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || '?';
@@ -47,26 +50,47 @@ export function startServer({
     res.end(JSON.stringify(body));
   };
 
+  // The two things anyone may write: a lap time and a ghost. Same site only,
+  // a few a minute per address, a small body, and `use` checks every field.
+  const post = (req, res, cap, use) => {
+    if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+    if (req.headers.origin && !originOk(req)) return json(res, 403, { error: 'origin' });
+    const ip = ipOf(req), now = Date.now(), p = posts.get(ip) || { n: 0, t: now };
+    if (now - p.t > 60000) { p.n = 0; p.t = now; }
+    posts.set(ip, p);
+    if (++p.n > LIMITS.postsPerMin) return json(res, 429, { error: 'slow down' });
+    let body = '', over = false;
+    req.on('data', (c) => {
+      if (over) return;
+      body += c;
+      if (body.length > cap) { over = true; body = ''; json(res, 413, { error: 'too big' }); req.destroy(); }
+    });
+    req.on('end', () => {
+      if (over) return;
+      try {
+        const msg = JSON.parse(body);
+        if (!msg || typeof msg !== 'object') throw new Error('not an object');
+        json(res, 200, use(msg));
+      } catch { json(res, 400, { error: 'bad request' }); }
+    });
+    return undefined;
+  };
+
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/health') return json(res, 200, { ok: true, rooms: rooms.size });
     if (url.pathname === '/api/records') {
       if (req.method === 'GET') return json(res, 200, records.top(10));
-      if (req.method !== 'POST') return json(res, 405, { error: 'method' });
-      if (req.headers.origin && !originOk(req)) return json(res, 403, { error: 'origin' });
-      const ip = ipOf(req), now = Date.now(), p = posts.get(ip) || { n: 0, t: now };
-      if (now - p.t > 60000) { p.n = 0; p.t = now; }
-      posts.set(ip, p);
-      if (++p.n > LIMITS.postsPerMin) return json(res, 429, { error: 'slow down' });
-      let body = '';
-      req.on('data', (c) => { body += c; if (body.length > LIMITS.post) req.destroy(); });
-      req.on('end', () => {
-        try {
-          const { track, name, ms } = JSON.parse(body);
-          json(res, 200, { ...records.submit(String(track), name, Number(ms)), top: records.top(10)[String(track)] || [] });
-        } catch { json(res, 400, { error: 'bad request' }); }
-      });
-      return undefined;
+      return post(req, res, LIMITS.post, ({ track, name, ms }) => (
+        { ...records.submit(String(track), name, Number(ms)), top: records.top(10)[String(track)] || [] }));
+    }
+    // The lap to beat in a time trial: the quickest one anybody has sent the path of.
+    if (url.pathname === '/api/ghost') {
+      if (req.method === 'GET') {
+        const g = ghosts.get(String(url.searchParams.get('track')));
+        return g ? json(res, 200, g) : json(res, 404, { error: 'no ghost yet' });
+      }
+      return post(req, res, LIMITS.ghostPost, ({ track, name, ms, d }) => ghosts.submit(String(track), name, ms, d));
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'method' });
 
@@ -188,12 +212,12 @@ export function startServer({
 
   const close = () => new Promise((done) => {
     clearInterval(tick); clearInterval(sweep);
-    records.save();
+    records.save(); ghosts.save();
     for (const ws of wss.clients) ws.terminate();
     server.close(() => done());
   });
   return new Promise((ready) => {
-    server.listen(port, () => ready({ server, port: server.address().port, rooms, records, close }));
+    server.listen(port, () => ready({ server, port: server.address().port, rooms, records, ghosts, close }));
   });
 }
 

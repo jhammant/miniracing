@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Room, MAX_CARS, OPEN, cleanName, ELIM } from '../src/shared/room.js';
+import { Room, MAX_CARS, OPEN, cleanName, ELIM, LIGHTS } from '../src/shared/room.js';
+import { DRIVERS } from '../src/shared/drivers.js';
 import { TRACKS, trackById } from '../src/shared/tracks.js';
 
 function setup(kind = 'party', settings) {
@@ -126,8 +127,123 @@ test('elimination: fall behind the leader and you are out; first to the target w
   for (let i = 0; i < 10; i++) { clock.t += 66; room.tick(); }
   assert.ok(b.out);
   assert.equal(last('round').winner, a.id);
+  assert.deepEqual(last('round').lights, { [a.id]: 5, [b.id]: 3 });
   assert.equal(room.phase, 'results');
   assert.equal(last('results').order[0].name, 'ANN');
+});
+
+test('eight lights: a round win lights one, the bottom half lose one, all eight ends it early', () => {
+  // Arrange
+  const { room, clock, last, go } = setup('party', { mode: 'elim', laps: 9, bots: 0 });
+  room.addClient('b', {}); room.addClient('c', {});
+  go();
+  const [a, b, c] = ['a', 'b', 'c'].map((id) => carOf(room, id));
+  const round = () => {
+    clock.t = room.race.graceUntil + 100;
+    room.onMessage('a', { t: 'st', c: [st(a, 300, 300)] });
+    room.onMessage('b', { t: 'st', c: [st(b, 100, 100)] });
+    room.onMessage('c', { t: 'st', c: [st(c, 0, 0)] });
+    for (let i = 0; i < 10; i++) { clock.t += 66; room.tick(); }
+  };
+  // Act
+  round();
+  // Assert: three cars, so only the last of them is in the bottom half
+  assert.deepEqual(last('round').lights, { [a.id]: 5, [b.id]: 4, [c.id]: 3 });
+  assert.deepEqual(last('round').lost, [c.id]);
+  assert.equal(room.phase, 'racing');
+  // Act: the same again until somebody has all eight
+  for (let i = 0; i < 3; i++) { clock.t += ELIM.pause + 10; room.tick(); assert.equal(room.race.round, i + 2); round(); }
+  // Assert
+  assert.equal(room.phase, 'results');
+  assert.equal(room.race.round, 4);
+  assert.deepEqual(last('results').order.map((r) => [r.name, r.lights]), [['ANN', LIGHTS.total], ['RACER', 4], ['RACER', 0]]);
+});
+
+test('a cup goes round every room, the bottom half lose a life, and no lives means watching', () => {
+  // Arrange
+  const { room, last, go } = setup('party', { mode: 'cup', laps: 1, bots: 0, track: TRACKS[1].id });
+  room.addClient('b', { name: 'Bob' }); room.addClient('c', { name: 'Cy' }); room.addClient('d', { name: 'Di' });
+  const ids = ['a', 'b', 'c', 'd'], minLap = (id) => trackById(id).minLap + 1;
+  const race = () => { for (const id of ids) { const car = carOf(room, id); if (!car.waiting) room.onMessage(id, { t: 'lap', car: car.id, n: 1, ms: minLap(room.race.track) }); } };
+  // Act: the first race, finished in joining order
+  go(); race();
+  // Assert
+  let res = last('results');
+  assert.equal(room.race.track, TRACKS[1].id);
+  assert.deepEqual(res.cup && [res.cup.i, res.cup.n, res.cup.done, res.cup.next], [0, TRACKS.length, false, TRACKS[2 % TRACKS.length].id]);
+  assert.deepEqual(res.order.map((r) => [r.name, r.lives, r.lost]), [['ANN', 3, false], ['BOB', 3, false], ['CY', 2, true], ['DI', 2, true]]);
+  // Settings are fixed while a cup is on
+  room.onMessage('a', { t: 'set', settings: { mode: 'race' } });
+  assert.equal(room.settings.mode, 'cup');
+  // Act: two more, same order, so Cy and Di run out of lives
+  go(); race(); go(); race();
+  res = last('results');
+  assert.equal(room.race.track, TRACKS[3 % TRACKS.length].id);
+  assert.deepEqual(res.cup.table.map((r) => [r.name, r.lives]), [['ANN', 3], ['BOB', 3], ['CY', 0], ['DI', 0]]);
+  assert.equal(res.cup.done, false);
+  // Act: the fourth race has two cars on the grid, and its loser is the bottom half
+  go();
+  assert.deepEqual(room.race.grid.map((id) => room.cars.get(id).name).sort(), ['ANN', 'BOB']);
+  assert.ok(carOf(room, 'c').waiting && room.state().cars.find((c) => c.name === 'CY').lives === 0);
+  race(); go(); race(); go(); race();
+  // Assert: Bob is out too, one car left, so the cup is over and Ann has it
+  res = last('results');
+  assert.ok(res.cup.done);
+  assert.equal(res.cup.champion, carOf(room, 'a').id);
+  assert.equal(carOf(room, 'a').pts, 15 * 6);
+  // Back to the lobby clears it
+  room.onMessage('a', { t: 'lobby' });
+  assert.equal(room.state().cup, null);
+  assert.equal(room.settings.track, TRACKS[1].id);
+  assert.ok(room.state().cars.every((c) => !c.waiting && c.lives === undefined));
+});
+
+test('a time trial is solo only: no bots, no items, and laps until you stop', () => {
+  // Arrange
+  const party = setup('party', { mode: 'trial' });
+  const { room, go } = setup('solo', { mode: 'trial', laps: 3 });
+  // Act
+  go();
+  // Assert
+  assert.equal(party.room.settings.mode, 'race');
+  assert.equal(room.cars.size, 1);
+  assert.deepEqual([room.race.trial, room.race.items, room.race.catchup, room.race.mode], [true, false, false, 'race']);
+  const car = carOf(room, 'a');
+  for (let n = 1; n <= 5; n++) room.onMessage('a', { t: 'lap', car: car.id, n, ms: trackById(room.race.track).minLap + n });
+  assert.equal(car.lapsDone, 5);
+  assert.equal(room.phase, 'racing');
+  // Alone, you may stop whenever you like; with others in the room the race is not yours to end
+  party.room.onMessage('a', { t: 'set', settings: { mode: 'race' } });
+  party.go();
+  party.room.onMessage('a', { t: 'lobby' });
+  room.onMessage('a', { t: 'lobby' });
+  assert.equal(party.room.phase, 'racing');
+  assert.deepEqual([room.phase, room.race], ['lobby', null]);
+});
+
+test('drivers are a number from the list; the horn reaches everyone, not too often, and only for your own car', () => {
+  // Arrange
+  const { room, sent, clock, go } = setup('party', { bots: 2 });
+  room.addClient('b', { name: 'Bob', driver: 7 });
+  room.addClient('c', { name: 'Cy', driver: 'x<script>' });
+  // Assert
+  assert.equal(carOf(room, 'b').driver, 7);
+  assert.ok([...room.cars.values()].every((c) => Number.isInteger(c.driver) && c.driver >= 0 && c.driver < DRIVERS.length));
+  room.onMessage('b', { t: 'me', driver: 999 });
+  assert.equal(carOf(room, 'b').driver, 7);
+  room.onMessage('b', { t: 'me', driver: 2 });
+  assert.equal(room.state().cars.find((c) => c.name === 'BOB').driver, 2);
+  // Act: not before a race; then twice at once, then again later
+  const horns = () => sent.filter((m) => m.t === 'horn' && m.id === 'a');
+  room.onMessage('b', { t: 'horn' });
+  assert.equal(horns().length, 0);
+  go();
+  room.onMessage('b', { t: 'horn', car: carOf(room, 'a').id });
+  room.onMessage('b', { t: 'horn' });
+  clock.t += 500;
+  room.onMessage('b', { t: 'horn' });
+  // Assert: always Bob's own car, whatever the message says
+  assert.deepEqual(horns().map((m) => m.car), [carOf(room, 'b').id, carOf(room, 'b').id]);
 });
 
 test('a shared screen owns the pad cars and gets their sticks', () => {

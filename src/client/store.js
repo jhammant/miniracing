@@ -3,7 +3,7 @@
 const KEY = 'miniracing.v1';
 const touch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 const defaults = {
-  name: '', color: -1, camera: 'chase', retro: false, quality: 'auto', autoGas: touch,
+  name: '', color: -1, driver: -1, ghost: 'best', camera: 'chase', retro: false, quality: 'auto', autoGas: touch,
   sfx: 0.8, music: 0.5, muted: false, pbs: {},
 };
 

@@ -167,6 +167,7 @@ export class Scene {
     this.owned = [];
     // Another room can mean another kind of vehicle, so the old ones go.
     for (const id of [...this.cars.keys()]) this.dropCar(id);
+    this.dropGhost();
     const look = this.look = lookOf(world.def.id), theme = this.theme = look.theme;
     this.root.background = new THREE.Color(theme.bg);
     this.root.fog.color.set(theme.bg);
@@ -336,6 +337,30 @@ export class Scene {
     this.carLayer.remove(v.group, v.blob);
     if (v.tag) { v.tag.material.map.dispose(); v.tag.material.dispose(); }
     this.cars.delete(id);
+  }
+
+  // The time-trial ghost: a see-through vehicle at `pose` { x, y, z, h }, or none.
+  setGhost(pose) {
+    if (!pose || !this.world) { if (this.ghost) this.ghost.visible = false; return; }
+    if (!this.ghost) {
+      const body = buildVehicle(this.world.def.vehicle, '#ffffff', 0), mats = this.ghostMats = [];
+      const fade = (m) => { const c = m.clone(); Object.assign(c, { transparent: true, opacity: 0.4, depthWrite: false }); mats.push(c); return c; };
+      body.traverse((o) => { if (o.isMesh) o.material = Array.isArray(o.material) ? o.material.map(fade) : fade(o.material); });
+      body.position.y = this.world.veh.hover || 0;
+      this.ghost = new THREE.Group();
+      this.ghost.add(body);
+      this.carLayer.add(this.ghost);
+    }
+    this.ghost.visible = true;
+    this.ghost.position.set(pose.x, pose.y, pose.z);
+    this.ghost.rotation.y = pose.h;
+  }
+
+  dropGhost() {
+    if (!this.ghost) return;
+    this.carLayer.remove(this.ghost);
+    for (const m of this.ghostMats) m.dispose();
+    this.ghost = null;
   }
 
   syncCars(game, dt) {

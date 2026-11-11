@@ -190,6 +190,11 @@ const SFX = {
     hiss(v, t + 0.34, 0.6, 0.3, { type: 'highpass', f: 3000, to: 6000 });
   },
   click: (v, t) => tone(v, t, 'square', 1800, 0.025, 0.1),
+  // Four horns, one per kind of driver: beep-beep, a lorry, a clown car and an ah-oo-gah.
+  horn0: (v, t) => { for (const at of [0, 0.17]) { tone(v, t + at, 'square', 440, 0.11, 0.17, { sus: 0.8 }); tone(v, t + at, 'square', 554, 0.11, 0.13, { sus: 0.8 }); } },
+  horn1: (v, t) => { tone(v, t, 'sawtooth', 185, 0.42, 0.2, { sus: 0.85, lp: [1400, 900, 1] }); tone(v, t, 'sawtooth', 233, 0.42, 0.16, { sus: 0.85, lp: [1400, 900, 1] }); },
+  horn2: (v, t) => riff(v, t, 'p25', [[72, 0, 0.07], [72, 0.08, 0.07], [72, 0.16, 0.07], [77, 0.24, 0.1], [81, 0.36, 0.2]], 0.17, { sus: 0.6 }),
+  horn3: (v, t) => { tone(v, t, 'p25', 300, 0.2, 0.19, { to: 520, glide: 0.16, sus: 0.8 }); tone(v, t + 0.21, 'p25', 520, 0.3, 0.19, { to: 330, glide: 0.22, sus: 0.8, vib: 30, vibRate: 18 }); },
   join: (v, t) => { tone(v, t, 'p25', hz(79), 0.07, 0.15, { sus: 0.5 }); tone(v, t + 0.07, 'p25', hz(86), 0.12, 0.15, { sus: 0.3 }); },
   wrongWay: (v, t) => {
     for (const at of [0, 0.22]) { tone(v, t + at, 'sawtooth', 110, 0.18, 0.18, { sus: 0.85 }); tone(v, t + at, 'square', 117, 0.18, 0.12, { sus: 0.85 }); }

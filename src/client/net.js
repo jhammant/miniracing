@@ -38,7 +38,7 @@ export class WsConn {
 }
 
 export class LocalConn {
-  constructor({ name, color, bots, kind = 'solo' }) {
+  constructor({ name, color, driver, bots, kind = 'solo' }) {
     this.onmsg = () => {}; this.onclose = () => {};
     this.open = true; this.rtt = 0;
     // Solo laps still count for the global board when the server is reachable.
@@ -49,7 +49,7 @@ export class LocalConn {
     this.room = new Room({ kind, records, send: (id, m) => queueMicrotask(() => this.open && this.onmsg(m)) });
     if (bots !== undefined) this.room.settings.bots = bots;
     this.timer = setInterval(() => this.room.tick(1 / 15), 1000 / 15);
-    queueMicrotask(() => this.room.addClient('me', { name, color }));
+    queueMicrotask(() => this.room.addClient('me', { name, color, driver }));
   }
 
   now() { return Date.now(); }

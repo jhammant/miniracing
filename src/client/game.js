@@ -7,7 +7,7 @@ import { getWorld, updateMovers } from '../shared/world.js';
 import { makeCar, placeCar, stepCar, collideCars, updateSlipstream, packCar, unpackCar, DT } from '../shared/physics.js';
 import { bakeAI, makeBot, botInput, botWantsItem } from '../shared/ai.js';
 import { TUNING, rocketPos } from '../shared/items.js';
-import { COLORS, ELIM } from '../shared/room.js';
+import { COLORS, ELIM, LIGHTS } from '../shared/room.js';
 import { wrapAngle } from '../shared/track.js';
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -49,7 +49,7 @@ export class Game {
         this.on('carAdded', car);
       }
       const wasLocal = car.local;
-      Object.assign(car, { name: info.name, colorIdx: info.color, color: COLORS[info.color] || COLORS[0], bot: info.bot, owner: info.owner, pad: info.pad, pts: info.pts, waiting: info.waiting });
+      Object.assign(car, { name: info.name, colorIdx: info.color, color: COLORS[info.color] || COLORS[0], bot: info.bot, owner: info.owner, pad: info.pad, pts: info.pts, waiting: info.waiting, driver: info.driver, lives: info.lives });
       car.local = info.owner === this.me;
       // The host left and its bots are now ours: pick them up where they are.
       if (car.local && !wasLocal && this.world && car.active) this.adopt(car);
@@ -82,7 +82,7 @@ export class Game {
     this.bots.clear();
     this.started = false; this.step = 0; this.acc = 0;
     for (const car of this.cars.values()) {
-      Object.assign(car, { active: false, item: null, laps: 0, best: 0, lastLap: 0, lapStart: 0, wins: 0, finPos: 0, finished: false, out: false, lapsDone: 0, catchup: 0, pickT: 0 });
+      Object.assign(car, { active: false, item: null, laps: 0, best: 0, lastLap: 0, lapStart: 0, wins: 0, finPos: 0, finished: false, out: false, lapsDone: 0, catchup: 0, pickT: 0, lights: r.lights?.[car.id] ?? LIGHTS.start });
     }
     this.placeGrid(r);
     this.on('race', { race: r, world: this.world, joining });
@@ -154,7 +154,13 @@ export class Game {
         if (car.local) { car.frozen = true; car.vx = 0; car.vz = 0; }
         this.on('out', { car });
         break;
-      case 'round': if (car === null && this.cars.get(m.winner)) { this.cars.get(m.winner).wins = m.wins; this.on('round', { car: this.cars.get(m.winner), wins: m.wins, target: m.target }); } break;
+      case 'round': {
+        const winner = this.cars.get(m.winner);
+        for (const c of this.cars.values()) if (m.lights[c.id] !== undefined) c.lights = m.lights[c.id];
+        if (winner) { winner.wins = m.wins; this.on('round', { car: winner, round: m.round, max: m.max, lost: m.lost }); }
+        break;
+      }
+      case 'horn': if (car) this.on('horn', { car }); break;
       case 'results': this.phase = 'results'; this.endRace(); this.on('results', m); break;
       case 'pad': this.pads.set(m.car, { s: m.s, b: m.b, u: m.u, used: this.pads.get(m.car)?.used ?? m.u, at: performance.now() }); break;
       default:

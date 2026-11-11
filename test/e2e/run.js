@@ -1,6 +1,7 @@
 // End-to-end run in real Chrome against a real server: a solo race to the
-// flag, an elimination game, a full 16-car online room, a late joiner, a
-// big-screen party with phones as pads, and two strangers in an open race.
+// flag, an elimination game, two rooms of a cup, a time trial against a ghost,
+// a full 16-car online room, a late joiner, a big-screen party with phones as
+// pads, and two strangers in an open race.
 // Needs `npm run build` first.
 //   node test/e2e/run.js [name ...]     e.g. node test/e2e/run.js solo party
 
@@ -105,6 +106,87 @@ const tests = {
     await p.waitForSelector('.results', { timeout: 240000 });
     assert.equal(await p.textContent('.results h2'), 'LAST CAR STANDING');
     await shot(p, 'elim-results');
+  },
+
+  async cup() {
+    const p = await page('desktop');
+    await p.fill('#name', 'cupper');
+    await p.click('[data-act=driver][data-val="3"]');
+    await act(p, 'solo');
+    await p.waitForSelector('.lobby');
+    assert.ok(await p.$('.players li .face'), 'drivers have faces in the lobby');
+    await p.click('[data-key=mode][data-val=cup]');
+    await p.waitForSelector('[data-val=cup].on');
+    await setLaps(p, 1);
+    await act(p, 'start');
+    await started(p);
+    await autopilot(p);
+    const first = await p.evaluate(() => window.miniracing.session.room.settings.track);
+    assert.equal(await p.textContent('#hud .sub'), 'ROOM 1/9');
+    // The horn goes to the room and comes back to everyone in it.
+    await p.evaluate(() => { const c = window.miniracing.session.conn, was = c.onmsg; window.horns = 0; c.onmsg = (m) => { if (m.t === 'horn') window.horns++; was(m); }; });
+    await p.keyboard.press('h');
+    await p.waitForFunction(() => window.horns === 1);
+    await p.waitForSelector('.results', { timeout: 150000 });
+    assert.equal(await p.textContent('.results h2'), 'CUP: ROOM 1 OF 9');
+    assert.equal(await p.$$eval('.podium .face', (f) => f.length), 3, 'three faces on the podium');
+    const lives = await p.$$eval('.results td.l', (tds) => tds.map((td) => td.querySelectorAll('i.on').length));
+    assert.equal(lives.length, 8);
+    assert.deepEqual([...lives].sort(), [2, 2, 2, 2, 3, 3, 3, 3], 'the bottom half lost a life');
+    await shot(p, 'cup-results');
+    assert.match(await p.textContent('.results [data-act=start]'), /NEXT ROOM/);
+    await act(p, 'start');
+    await p.waitForFunction((was) => { const r = window.miniracing.session.room; return r.phase !== 'results' && r.settings.track !== was; }, first, { timeout: 15000 });
+    await started(p);
+    assert.equal(await p.textContent('#hud .sub'), 'ROOM 2/9');
+    await sleep(3000);
+    await shot(p, 'cup-room-2');
+    // Giving up part way goes back to the lobby and the cup is over.
+    await p.keyboard.press('Escape');
+    await act(p, 'tolobby');
+    await p.waitForSelector('.lobby');
+    assert.equal(await p.evaluate(() => window.miniracing.session.room.cup), null);
+  },
+
+  async trial() {
+    const p = await page('desktop');
+    await p.fill('#name', 'ghosty');
+    await act(p, 'solo');
+    await p.waitForSelector('.lobby');
+    await p.click('[data-key=track][data-val=kitchen]');
+    await p.waitForSelector('[data-val=kitchen].on');
+    await p.click('[data-key=mode][data-val=trial]');
+    await p.waitForSelector('[data-val=trial].on');
+    assert.equal(await p.$('.stepper'), null, 'no laps or bots to set');
+    await shot(p, 'trial-lobby');
+    await act(p, 'start');
+    await started(p);
+    await autopilot(p);
+    assert.equal((await state(p)).cars.length, 1, 'alone on the track');
+    // The first lap is kept on this device and sent in as the room's record ghost...
+    await p.waitForFunction(() => localStorage.getItem('miniracing.ghost.kitchen'), null, { timeout: 90000 });
+    // ... and is there to race against on the second.
+    await p.waitForFunction(() => window.miniracing.scene.ghost?.visible, null, { timeout: 10000 });
+    assert.match(await p.textContent('#hud .sub'), /^GHOST: YOUR BEST \d:\d\d\.\d\d$/);
+    await sleep(2500);
+    await shot(p, 'trial-ghost');
+    const held = await (await fetch(`${url}/api/ghost?track=kitchen`)).json();
+    assert.equal(held.name, 'GHOSTY');
+    assert.ok(held.d.length > 200, 'the server has the lap');
+    await p.keyboard.press('Escape');
+    await act(p, 'tolobby');
+    await p.waitForSelector('.lobby');
+    // With nothing of your own to chase, the record holder's lap is the ghost from the off.
+    await p.evaluate(() => localStorage.removeItem('miniracing.ghost.kitchen'));
+    await p.click('[data-act=ghost][data-val=record]');
+    await p.waitForSelector('[data-act=ghost][data-val=record].on');
+    await act(p, 'start');
+    await started(p);
+    await p.waitForFunction(() => window.miniracing.scene.ghost?.visible, null, { timeout: 10000 });
+    assert.match(await p.textContent('#hud .sub'), /^GHOST: GHOSTY /);
+    await p.keyboard.press('Escape');
+    await act(p, 'leave');
+    await p.waitForSelector('.home');
   },
 
   async party() {

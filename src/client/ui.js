@@ -5,10 +5,23 @@
 import qrcode from 'qrcode-generator';
 import { TRACKS, trackById } from '../shared/tracks.js';
 import { getWorld } from '../shared/world.js';
-import { COLORS, MAX_CARS, cleanName } from '../shared/room.js';
+import { COLORS, MAX_CARS, LIGHTS, CUP, cleanName } from '../shared/room.js';
+import { DRIVERS } from '../shared/drivers.js';
+import { face, driverName } from './faces.js';
+import { lamps } from './hud.js';
 import { store, save, fmtTime, ordinal, esc } from './store.js';
 
 const LAPS = [1, 3, 5, 7, 9];
+const MODES = [['race', 'RACE'], ['elim', 'ELIMINATION'], ['cup', 'CUP']];
+// What "laps" starts at when you pick a mode. In elimination it is the most rounds played.
+const MODE_LAPS = { race: 5, elim: 7, cup: 3 };
+const MODE_BLURB = {
+  race: 'FIRST OVER THE LINE. EVERY LAP COUNTS FOR THE RECORD BOARD.',
+  elim: 'FALL TOO FAR BEHIND THE LEADER AND YOU ARE OUT. WIN A ROUND AND ONE OF THE EIGHT LIGHTS COMES ON; FINISH IN THE BOTTOM HALF AND ONE GOES OUT. LIGHT ALL EIGHT TO WIN.',
+  cup: 'EVERY ROOM ONCE, STARTING WITH THIS ONE. FINISH IN THE BOTTOM HALF AND YOU LOSE A LIFE. NO LIVES LEFT, NO MORE RACING.',
+  trial: 'YOU AND THE CLOCK: NO BOTS, NO POWER-UPS, NO CATCH-UP. LAP FOR AS LONG AS YOU LIKE AND CHASE THE GHOST.',
+};
+const mug = (c, mood) => face(c.driver, mood, COLORS[c.color] || COLORS[0]);
 
 function qrSvg(text) {
   const qr = qrcode(0, 'M');
@@ -30,7 +43,7 @@ function trackThumb(id) {
   return thumbs.get(id);
 }
 
-const seg = (key, options, current, on = true) => `<div class="seg${on ? '' : ' ro'}">${options.map(([val, label]) =>
+const seg = (key, options, current, on = true, wrap = false) => `<div class="seg${on ? '' : ' ro'}${wrap ? ' wrap' : ''}">${options.map(([val, label]) =>
   `<button data-act="set" data-key="${key}" data-val="${val}" class="${String(current) === String(val) ? 'on' : ''}"${on ? '' : ' disabled'}>${label}</button>`).join('')}</div>`;
 const stepper = (key, text, on, canDown, canUp) => `<div class="stepper${on ? '' : ' ro'}">
   <button data-act="step" data-key="${key}" data-val="-1"${on && canDown ? '' : ' disabled'}>−</button><b>${text}</b>
@@ -85,7 +98,16 @@ export class UI {
         if (code.length === 4) h.join(code); else this.root.querySelector('#code')?.focus();
         break;
       }
-      case 'color': save({ color: Number(val) }); this.root.querySelectorAll('.swatches button').forEach((b) => b.classList.toggle('on', b.dataset.val === val)); h.profile(); break;
+      case 'color': save({ color: Number(val) }); this.root.querySelectorAll('.swatches button').forEach((b) => b.classList.toggle('on', b.dataset.val === val)); h.profile('color'); break;
+      case 'driver': {
+        save({ driver: Number(val) });
+        this.root.querySelectorAll('.drivers button').forEach((b) => b.classList.toggle('on', b.dataset.val === val));
+        const who = this.root.querySelector('.profile .who');
+        if (who) who.textContent = driverName(store.driver);
+        h.profile('driver');
+        break;
+      }
+      case 'ghost': save({ ghost: val }); if (room) this.lobby(room, this.me); break;
       case 'leave': h.leave(); break;
       case 'start': h.start(); break;
       case 'tolobby': h.toLobby(); break;
@@ -104,7 +126,7 @@ export class UI {
       case 'set': {
         if (!room) break;
         const patch = key === 'items' || key === 'catchup' ? { [key]: val === 'true' } : { [key]: val };
-        if (key === 'mode') patch.laps = val === 'elim' ? 3 : 5;
+        if (key === 'mode' && MODE_LAPS[val]) patch.laps = MODE_LAPS[val];
         h.set(patch);
         break;
       }
@@ -123,6 +145,7 @@ export class UI {
 
   home({ error = '', code = '' } = {}) {
     this.room = null; this.inRace = false;
+    if (!DRIVERS[store.driver]) save({ driver: Math.floor(Math.random() * DRIVERS.length) });
     const mine = store.color;
     this.show('home', `
       <div class="home">
@@ -133,6 +156,8 @@ export class UI {
             <label for="name">YOUR NAME</label>
             <input id="name" maxlength="12" value="${esc(store.name)}" placeholder="RACER" autocomplete="off" autocapitalize="characters" spellcheck="false" enterkeyhint="done">
             <div class="swatches">${COLORS.map((c, i) => `<button data-act="color" data-val="${i}" class="${i === mine ? 'on' : ''}" style="background:${c}" aria-label="Car colour ${i + 1}"></button>`).join('')}</div>
+            <label>YOUR DRIVER <em class="who">${driverName(store.driver)}</em></label>
+            <div class="drivers">${DRIVERS.map((d, i) => `<button data-act="driver" data-val="${i}" class="${i === store.driver ? 'on' : ''}" aria-label="Driver ${d.name}">${face(i, 'happy')}</button>`).join('')}</div>
           </div>
         </div>
         <div class="menu">
@@ -157,7 +182,7 @@ export class UI {
   lobby(room, me) {
     this.room = room; this.me = me; this.inRace = false;
     const s = room.settings, host = me.id === room.host && !room.open, solo = room.kind === 'solo', screen = room.kind === 'screen';
-    const humans = room.cars.filter((c) => !c.bot), elim = s.mode === 'elim', track = room.next || s.track;
+    const humans = room.cars.filter((c) => !c.bot), elim = s.mode === 'elim', trial = s.mode === 'trial', track = room.next || s.track;
     const soon = room.startAt ? `<span class="soon" data-until="${Number(room.startAt)}" data-pre="${room.next ? 'NEXT RACE IN ' : 'STARTS IN '}"></span>` : '<span class="soon">STARTING…</span>';
     const url = `${location.origin}/?j=${room.code}`;
     const title = solo ? 'SOLO RACE' : screen ? 'BIG SCREEN PARTY' : room.open ? 'OPEN RACE' : `ROOM ${esc(room.code)}`;
@@ -170,7 +195,7 @@ export class UI {
     const players = `
       <section class="card players">
         <h3>ON THE GRID <em>${room.cars.length}/${MAX_CARS}</em></h3>
-        <ul>${room.cars.map((c) => `<li class="${c.id === me.car ? 'me' : ''}"><i style="background:${COLORS[c.color] || COLORS[0]}"></i><span>${esc(c.name)}</span>${c.bot ? '<em>BOT</em>' : c.pts ? `<em>${c.pts} PTS</em>` : ''}</li>`).join('')}</ul>
+        <ul>${room.cars.map((c) => `<li class="${c.id === me.car ? 'me' : ''}">${mug(c)}<span>${esc(c.name)}</span>${c.bot ? '<em>BOT</em>' : c.pts ? `<em>${c.pts} PTS</em>` : ''}</li>`).join('')}</ul>
         ${screen && !humans.length ? '<p class="hint">WAITING FOR PHONES TO JOIN…</p>' : ''}
       </section>`;
     const setup = `
@@ -180,14 +205,16 @@ export class UI {
             ${trackThumb(t.id)}<b>${esc(t.name.toUpperCase())}</b></button>`).join('')}</div>
         <p class="blurb">${esc(trackById(track).blurb)}${store.pbs[track] ? ` &nbsp;YOUR BEST ${fmtTime(store.pbs[track])}` : ''}</p>
         <div class="opts">
-          <label>MODE</label>${seg('mode', [['race', 'RACE'], ['elim', 'ELIMINATION']], s.mode, host)}
-          <label>${elim ? 'ROUNDS TO WIN' : 'LAPS'}</label>${stepper('laps', s.laps, host, s.laps > LAPS[0], s.laps < LAPS[LAPS.length - 1])}
+          <label>MODE</label>${seg('mode', solo ? [...MODES, ['trial', 'TIME TRIAL']] : MODES, s.mode, host, true)}
+          ${trial ? `<label>GHOST</label><div class="seg">${[['best', 'YOUR BEST'], ['record', 'RECORD'], ['off', 'OFF']].map(([val, label]) =>
+    `<button data-act="ghost" data-val="${val}" class="${store.ghost === val ? 'on' : ''}">${label}</button>`).join('')}</div>` : `
+          <label>${elim ? 'MAX ROUNDS' : 'LAPS'}</label>${stepper('laps', s.laps, host, s.laps > LAPS[0], s.laps < LAPS[LAPS.length - 1])}
           <label>BOTS</label>${stepper('bots', room.cars.filter((c) => c.bot).length, host, s.bots > 0, room.cars.length < MAX_CARS)}
           <label>BOT SKILL</label>${seg('difficulty', [['easy', 'EASY'], ['normal', 'MEDIUM'], ['hard', 'HARD']], s.difficulty, host)}
           <label>POWER-UPS</label>${seg('items', [[true, 'ON'], [false, 'OFF']], s.items, host)}
-          <label>CATCH-UP</label>${seg('catchup', [[true, 'ON'], [false, 'OFF']], s.catchup, host)}
+          <label>CATCH-UP</label>${seg('catchup', [[true, 'ON'], [false, 'OFF']], s.catchup, host)}`}
         </div>
-        <p class="blurb">${elim ? 'FALL TOO FAR BEHIND THE LEADER AND YOU ARE OUT. LAST CAR LEFT WINS THE ROUND.' : 'FIRST OVER THE LINE. EVERY LAP COUNTS FOR THE RECORD BOARD.'}</p>
+        <p class="blurb">${MODE_BLURB[s.mode] || MODE_BLURB.race}</p>
       </section>`;
     const canStart = host && room.cars.length > 0;
     this.show('lobby', `
@@ -200,26 +227,45 @@ export class UI {
 
   results(msg, room, me) {
     this.room = room; this.me = me; this.inRace = false;
-    const host = me.id === room.host && !room.open, elim = msg.mode === 'elim', track = trackById(msg.track);
+    const host = me.id === room.host && !room.open, elim = msg.mode === 'elim', cup = msg.cup, track = trackById(msg.track), n = msg.order.length;
     const soon = room.open && room.startAt && room.next ? `<span class="soon" data-until="${Number(room.startAt)}" data-pre="${esc(trackById(room.next).name.toUpperCase())} IN "></span>` : '';
+    // Smiles for the winner, a tear for the bottom half and anyone who did not finish.
+    const mood = (c, i) => (i === 0 ? 'happy' : c.lost || (n > 2 && i >= Math.ceil(n / 2)) || (!elim && !c.time) ? 'sad' : 'neutral');
+    const lives = (c) => `<span class="pips lives">${lamps(c.lives ?? CUP.lives, CUP.lives)}</span>`;
     const rows = msg.order.map((c, i) => `
       <tr class="${c.id === me.car ? 'me' : ''}">
         <td class="p">${ordinal(i + 1)}</td>
-        <td class="n"><i style="background:${COLORS[c.color] || COLORS[0]}"></i>${esc(c.name)}</td>
-        <td>${elim ? '★'.repeat(c.wins || 0) || '-' : c.time ? fmtTime(c.time) : 'DNF'}</td>
+        <td class="n">${mug(c, mood(c, i))}${esc(c.name)}</td>
+        <td>${elim ? `<span class="pips">${lamps(c.lights ?? LIGHTS.start, LIGHTS.total)}</span>` : c.time ? fmtTime(c.time) : 'DNF'}</td>
         ${elim ? '' : `<td class="b">${c.best ? fmtTime(c.best) : ''}</td>`}
+        ${cup ? `<td class="l${c.lost ? ' lost' : ''}">${lives(c)}</td>` : ''}
         <td class="g">${c.gained ? `+${c.gained}` : ''}</td><td class="t">${c.pts ?? 0}</td>
       </tr>`).join('');
+    const podium = `<div class="podium">${[1, 0, 2].filter((i) => msg.order[i]).map((i) => {
+      const c = msg.order[i];
+      return `<div class="p${i + 1}${c.id === me.car ? ' me' : ''}">${mug(c, mood(c, i))}<b>${ordinal(i + 1)}</b><span>${esc(c.name)}</span></div>`;
+    }).join('')}</div>`;
+    // The cup is over: the champion, then how everyone stands.
+    const champ = cup && cup.done ? cup.table.find((c) => c.id === cup.champion) : null;
+    const final = champ ? `
+      <div class="card champ${champ.id === me.car ? ' me' : ''}">${mug(champ, 'happy')}<div><small>CUP CHAMPION</small><b>${esc(champ.name)}</b><small>${champ.pts} PTS</small></div></div>
+      <div class="card"><table><tbody>${cup.table.map((c, i) => `
+        <tr class="${c.id === me.car ? 'me' : ''}"><td class="p">${ordinal(i + 1)}</td><td class="n">${mug(c, c.id === champ.id ? 'happy' : c.lives ? 'neutral' : 'sad')}${esc(c.name)}</td><td>${lives(c)}</td><td class="t">${c.pts}</td></tr>`).join('')}
+      </tbody></table></div>` : '';
+    const title = elim ? (msg.order[0]?.lights >= LIGHTS.total ? 'ALL EIGHT LIGHTS!' : 'LAST CAR STANDING') : champ ? 'THE CUP IS WON' : cup ? `CUP: ROOM ${cup.i + 1} OF ${cup.n}` : 'RACE RESULTS';
+    const again = cup && !cup.done ? '<button class="btn" data-act="tolobby">END THE CUP</button><button class="btn primary" data-act="start">NEXT ROOM ▶</button>'
+      : `<button class="btn" data-act="tolobby">CHANGE TRACK</button><button class="btn primary" data-act="start">${cup ? 'NEW CUP ▶' : 'RACE AGAIN ▶'}</button>`;
     this.show('results', `
       <div class="results">
-        <h2>${elim ? 'LAST CAR STANDING' : 'RACE RESULTS'}</h2>
-        <p class="blurb">${esc(track.name.toUpperCase())}</p>
+        <h2>${title}</h2>
+        ${champ ? final : podium}
+        <p class="blurb">${esc(track.name.toUpperCase())}${cup && cup.next ? ` &nbsp;NEXT: ${esc(trackById(cup.next).name.toUpperCase())}` : ''}</p>
         <div class="card"><table>
-          <thead><tr><th></th><th></th><th>${elim ? 'ROUNDS' : 'TIME'}</th>${elim ? '' : '<th class="b">BEST LAP</th>'}<th></th><th>PTS</th></tr></thead>
+          <thead><tr><th></th><th></th><th>${elim ? 'LIGHTS' : 'TIME'}</th>${elim ? '' : '<th class="b">BEST LAP</th>'}${cup ? '<th>LIVES</th>' : ''}<th></th><th>PTS</th></tr></thead>
           <tbody>${rows}</tbody></table></div>
         <div class="row">
           <button class="btn" data-act="leave">LEAVE</button>
-          ${host ? '<button class="btn" data-act="tolobby">CHANGE TRACK</button><button class="btn primary" data-act="start">RACE AGAIN ▶</button>' : room.open ? soon : '<span class="wait">WAITING FOR THE HOST…</span>'}
+          ${host ? again : room.open ? soon : '<span class="wait">WAITING FOR THE HOST…</span>'}
         </div>
       </div>`);
   }
@@ -262,9 +308,10 @@ export class UI {
           <label>SOUND</label><input type="range" min="0" max="100" value="${Math.round(store.sfx * 100)}" data-vol="sfx" aria-label="Sound volume">
           <label>MUSIC</label><input type="range" min="0" max="100" value="${Math.round(store.music * 100)}" data-vol="music" aria-label="Music volume">
         </div>
-        <p class="blurb">STEER: ◀ ▶ OR A D &nbsp; BRAKE: ▼ OR S &nbsp; POWER-UP: SPACE</p>
+        <p class="blurb">STEER: ◀ ▶ OR A D &nbsp; BRAKE: ▼ OR S &nbsp; POWER-UP: SPACE &nbsp; HORN: H</p>
         <div class="row">
           ${inRace ? '<button class="btn" data-act="leave">LEAVE RACE</button>' : ''}
+          ${inRace && this.room?.kind === 'solo' ? `<button class="btn" data-act="tolobby">${this.room.settings.mode === 'trial' ? 'END THE TRIAL' : 'CHANGE TRACK'}</button>` : ''}
           <button class="btn primary" data-act="resume">${inRace ? 'BACK TO THE RACE' : 'DONE'}</button>
         </div>
       </div>`);
