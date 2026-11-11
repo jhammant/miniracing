@@ -10,10 +10,14 @@ Play it at <https://miniracing.hammantlabs.com>.
 - **Four rooms**: the breakfast table (mind the milk, and the edge), a figure of
   eight on the snooker table, the kitchen floor and the bedroom road rug.
 - **Up to 16 cars** in a race. Bots fill the grid if you want them.
-- **Three ways to play**
+- **Four ways to play**
   - *Solo*: you against seven bots, no connection needed once the page has loaded.
-  - *Online room*: start a room, share the four-letter code or the QR code, and
-    everyone races on their own device.
+  - *Play online*: one button puts you in an open race with whoever else is
+    about. Nobody hosts it: bots make the grid up to eight, races start on a
+    timer, the track changes after each one, and you can still bring a friend
+    in with the room's code.
+  - *Online room*: start a private room, share the four-letter code or the QR
+    code, and everyone races on their own device.
   - *Big screen party*: put the race on a TV or laptop and everyone uses their
     phone as a controller.
 - **Two modes**: a lap race with a camera on your own car, or elimination, where
@@ -83,8 +87,9 @@ BASE_URL=https://your.host node test/e2e/live.js   # smoke test of a deployed co
 
 The end-to-end run drives real Chrome (through `playwright-core`, using the
 Chrome already on your machine) against a real server: a solo race to the flag,
-an elimination game, a full 16-player room, a late joiner and a big-screen party
-with two phones as pads. Screenshots land in `test/e2e/shots/`.
+an elimination game, a full 16-player room, a late joiner, a big-screen party
+with two phones as pads, and two strangers matched into an open race.
+Screenshots land in `test/e2e/shots/`.
 
 Two more tools: `npm run sim` races bots headlessly and prints lap times, and
 `npm run map` draws each track as an SVG.
@@ -109,7 +114,9 @@ Everything you see and hear is generated in code: there are no model, texture
 or audio files.
 
 The server keeps no accounts and no personal data. A lap record is a name of up
-to ten characters, a time and a date.
+to twelve characters, a time and a date. There is no chat: the only thing
+players see of each other is that name, which is cut down to letters, digits
+and a little punctuation before anyone else gets it.
 
 ## Licence
 

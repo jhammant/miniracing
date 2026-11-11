@@ -11,7 +11,7 @@ before(async () => {
   dir = mkdtempSync(join(tmpdir(), 'miniracing-'));
   mkdirSync(join(dir, 'dist'));
   writeFileSync(join(dir, 'dist', 'index.html'), '<!doctype html><title>t</title>');
-  s = await startServer({ port: 0, dist: join(dir, 'dist'), dataDir: dir });
+  s = await startServer({ port: 0, dist: join(dir, 'dist'), dataDir: dir, open: { lobby: 600, late: 300 } });
   base = `http://localhost:${s.port}`;
 });
 after(() => s.close());
@@ -77,6 +77,29 @@ test('two players share a room: one creates, one joins by code, states are relay
   assert.equal(race.grid.length, 2);
   assert.deepEqual(snap.c[0].slice(0, 3), [ja.car, 1, 2]);
   a.ws.close(); b.ws.close();
+});
+
+test('playing with anyone: strangers land in the same open room, and it starts by itself', async () => {
+  // Arrange
+  const a = client(), b = client(), c = client();
+  await Promise.all([a.open(), b.open(), c.open()]);
+  c.send({ t: 'create', kind: 'party', name: 'Private' });
+  const jc = await c.next('joined');
+  // Act
+  a.send({ t: 'quick', name: 'Ann' });
+  const ja = await a.next('joined');
+  b.send({ t: 'quick', name: 'Bob' });
+  const jb = await b.next('joined');
+  // Assert
+  assert.equal(ja.open, true);
+  assert.equal(jb.code, ja.code);
+  assert.notEqual(ja.code, jc.code, 'a private room is never handed out');
+  assert.equal(jb.cars.filter((x) => !x.bot).length, 2);
+  a.send({ t: 'start' });
+  const race = await b.next('race');
+  assert.ok(Date.now() >= jb.startAt - 50, 'the race waited for its clock');
+  assert.equal(race.grid.length, 8);
+  a.ws.close(); b.ws.close(); c.ws.close();
 });
 
 test('joining a room that does not exist says so; flooding gets you dropped', async () => {

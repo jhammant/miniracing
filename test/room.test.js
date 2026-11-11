@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Room, MAX_CARS, cleanName, ELIM } from '../src/shared/room.js';
-import { trackById } from '../src/shared/tracks.js';
+import { Room, MAX_CARS, OPEN, cleanName, ELIM } from '../src/shared/room.js';
+import { TRACKS, trackById } from '../src/shared/tracks.js';
 
 function setup(kind = 'party', settings) {
   const sent = [], clock = { t: 1000 };
@@ -11,6 +11,15 @@ function setup(kind = 'party', settings) {
   const last = (t, id) => sent.filter((m) => m.t === t && (!id || m.id === id)).pop();
   const go = () => { room.onMessage('a', { t: 'start' }); clock.t = room.race.t0 + 1; room.tick(); };
   return { room, sent, clock, last, go };
+}
+// An open room: nobody hosts it, so nothing is set and nobody presses start.
+function setupOpen(open = true) {
+  const sent = [], clock = { t: 1000 };
+  const room = new Room({ code: 'OPEN', open, send: (id, msg) => sent.push({ id, ...msg }), now: () => clock.t, rnd: () => 0.5 });
+  room.addClient('a', { name: 'Ann' });
+  const last = (t, id) => sent.filter((m) => m.t === t && (!id || m.id === id)).pop();
+  const at = (t) => { clock.t = t; room.tick(); };
+  return { room, sent, clock, last, at };
 }
 const carOf = (room, id) => room.cars.get(room.clients.get(id).car);
 const st = (car, x, total) => [car.id, x, 0, 0, 0, 0, 0, 0, total, 0];
@@ -141,4 +150,74 @@ test('when the host leaves, the next player takes over the bots', () => {
   room.removeClient('a');
   assert.equal(room.host, 'b');
   assert.ok([...room.cars.values()].filter((c) => c.bot).every((c) => c.owner === 'b'));
+});
+
+test('an open room fills up with bots and starts by itself; nobody runs it', () => {
+  // Arrange
+  const { room, clock, last, at } = setupOpen();
+  const track = room.settings.track;
+  assert.ok(trackById(track));
+  assert.equal(room.settings.laps, OPEN.laps);
+  assert.equal(room.cars.size, OPEN.fill);
+  assert.equal(last('joined').open, true);
+  assert.equal(last('joined').startAt, 1000 + OPEN.lobby);
+  // Act: the only player tries to run it anyway
+  room.onMessage('a', { t: 'set', settings: { laps: 9, track: TRACKS.find((t) => t.id !== track).id, bots: 0 } });
+  room.onMessage('a', { t: 'start' });
+  // Assert
+  assert.equal(room.phase, 'lobby');
+  assert.deepEqual([room.settings.laps, room.settings.track, room.cars.size], [OPEN.laps, track, OPEN.fill]);
+  // A late arrival takes a bot's place and gets a moment before the off.
+  at(1000 + OPEN.lobby - 1);
+  room.addClient('b', { name: 'Bob' });
+  assert.equal(room.cars.size, OPEN.fill);
+  assert.equal(room.humanCars().length, 2);
+  assert.equal(room.startAt, clock.t + OPEN.late);
+  at(1000 + OPEN.lobby + 1);
+  assert.equal(room.phase, 'lobby');
+  at(room.startAt);
+  assert.equal(room.phase, 'countdown');
+  assert.equal(last('race').laps, OPEN.laps);
+  assert.equal(room.startAt, 0);
+});
+
+test('an open room moves to the next track and goes again after the results', () => {
+  // Arrange
+  const { room, clock, last, at } = setupOpen({ laps: 1 });
+  const first = room.settings.track, next = TRACKS[(TRACKS.findIndex((t) => t.id === first) + 1) % TRACKS.length].id;
+  at(room.startAt);
+  at(room.race.t0 + 1);
+  const a = carOf(room, 'a');
+  // Act
+  room.onMessage('a', { t: 'st', c: [st(a, 0, 0)] });
+  room.onMessage('a', { t: 'lap', car: a.id, n: 1, ms: 20000 });
+  // Assert
+  assert.equal(room.phase, 'results');
+  assert.equal(last('room').next, next);
+  assert.equal(room.startAt, clock.t + OPEN.results);
+  room.onMessage('a', { t: 'start' });
+  room.onMessage('a', { t: 'lobby' });
+  assert.equal(room.phase, 'results', 'still nobody to press the button');
+  at(room.startAt);
+  assert.equal(room.phase, 'countdown');
+  assert.equal(room.race.track, next);
+});
+
+test('an open room drops a player who has gone quiet, and ends a race that drags on', () => {
+  // Arrange
+  const { room, clock, last, at } = setupOpen();
+  room.addClient('b', { name: 'Bob' });
+  at(room.startAt);
+  const t0 = room.race.t0, b = carOf(room, 'b');
+  // Act: Bob keeps driving, Ann (the host) has put her phone down
+  for (let t = t0 + 1; t <= t0 + OPEN.away + 1000; t += 1000) { clock.t = t; room.onMessage('b', { t: 'st', c: [st(b, 0, 10)] }); room.tick(); }
+  // Assert
+  assert.equal(last('closed', 'a').away, true);
+  assert.ok(!room.clients.has('a'));
+  assert.equal(room.host, 'b');
+  assert.ok([...room.cars.values()].filter((c) => c.bot).every((c) => c.owner === 'b'));
+  assert.equal(room.phase, 'racing');
+  for (let t = clock.t; t <= t0 + OPEN.maxRace + 1000; t += 5000) { clock.t = t; room.onMessage('b', { t: 'st', c: [st(b, 0, 10)] }); room.tick(); }
+  assert.equal(room.phase, 'results');
+  assert.ok(room.clients.has('b'));
 });

@@ -8,7 +8,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes, randomInt } from 'node:crypto';
 import { WebSocketServer } from 'ws';
-import { Room } from '../src/shared/room.js';
+import { Room, MAX_CARS } from '../src/shared/room.js';
 import { Records } from './records.js';
 
 const TYPES = {
@@ -27,6 +27,7 @@ export function startServer({
   origins = (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
   trustProxy = process.env.TRUST_PROXY === '1',
   recordsFile,
+  open = true, // timings for open rooms; tests shorten them
 } = {}) {
   const records = new Records(recordsFile === undefined ? join(dataDir, 'records.json') : recordsFile);
   const rooms = new Map(), perIp = new Map(), posts = new Map();
@@ -138,6 +139,22 @@ export function startServer({
         room = new Room({ code, kind: msg.kind === 'screen' ? 'screen' : 'party', send: sendTo, records });
         rooms.set(code, room);
         room.addClient(id, msg);
+      } else if (msg.t === 'quick') {
+        // Any open room with a space will do: the busiest first, so people end up together.
+        let found = null;
+        for (const r of rooms.values()) {
+          const n = r.open && !r.dead ? r.humanCars().length : MAX_CARS;
+          if (n < MAX_CARS && (!found || n > found.humanCars().length)) found = r;
+        }
+        if (!found) {
+          const code = rooms.size < LIMITS.rooms && newCode();
+          if (!code) return sendTo(id, { t: 'error', error: 'The server is full. Try again in a bit.' });
+          found = new Room({ code, kind: 'party', open, send: sendTo, records });
+          rooms.set(code, found);
+        }
+        const res = found.addClient(id, msg);
+        if (res.error) return sendTo(id, { t: 'error', error: res.error });
+        room = found;
       } else if (msg.t === 'join') {
         const found = rooms.get(String(msg.code || '').toUpperCase().slice(0, 4));
         const res = found ? found.addClient(id, msg) : { error: 'No room with that code' };

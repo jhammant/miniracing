@@ -19,6 +19,11 @@ const BOT_NAMES = [
 ];
 const POINTS = [15, 12, 10, 8, 7, 6, 5, 4, 3, 2, 1];
 export const ELIM = { dist: 40, gap: 75, grace: 3000, pause: 2600 };
+// An open room is one anyone can be matched into. Nobody runs it: the settings
+// are fixed, bots make up the numbers, races start on a timer and the track
+// moves on after each one, and a player who has wandered off loses their place.
+// Times in ms.
+export const OPEN = { laps: 3, fill: 8, lobby: 20000, late: 5000, results: 15000, maxRace: 480000, away: 15000 };
 const FINISH_WINDOW = 30000;
 const COUNTDOWN = 4200;
 
@@ -29,14 +34,17 @@ export function cleanName(s) {
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 
 export class Room {
-  constructor({ code = 'SOLO', kind = 'party', send, now = Date.now, records = null, rnd = Math.random }) {
+  constructor({ code = 'SOLO', kind = 'party', open = null, send, now = Date.now, records = null, rnd = Math.random }) {
     Object.assign(this, { code, kind, send, now, records, rnd });
+    this.open = open ? { ...OPEN, ...(open === true ? {} : open) } : null;
     this.clients = new Map();
     this.cars = new Map();
     this.nextCar = 1;
     this.host = null;
     this.phase = 'lobby';
     this.settings = { track: TRACKS[0].id, laps: 5, mode: 'race', bots: kind === 'solo' ? 7 : 3, difficulty: 'normal', items: true, catchup: true };
+    if (this.open) Object.assign(this.settings, { laps: this.open.laps, track: TRACKS[Math.floor(rnd() * TRACKS.length) % TRACKS.length].id });
+    this.startAt = 0; // open rooms: when the next race starts by itself
     this.race = null;
     this.lastOrder = null;
     this.dead = false;
@@ -65,6 +73,11 @@ export class Room {
       client.car = car.id;
     }
     if (this.phase === 'lobby') this.reconcileBots();
+    if (this.open && this.phase === 'lobby') {
+      // The clock starts with the first arrival, and a late one still gets a moment to look round.
+      const t = this.now();
+      this.startAt = Math.max(this.startAt || t + this.open.lobby, t + this.open.late);
+    }
     this.send(id, { t: 'joined', you: id, role, car: client.car, now: this.now(), race: this.raceInfo(), ...this.state() });
     this.pushState();
     return { ok: true, role };
@@ -114,7 +127,7 @@ export class Room {
 
   reconcileBots() {
     const humans = this.humanCars().length;
-    let want = Math.min(this.settings.bots, MAX_CARS - humans);
+    let want = this.open ? Math.max(0, this.open.fill - humans) : Math.min(this.settings.bots, MAX_CARS - humans);
     if (this.settings.mode === 'elim' && humans + want < 2) want = 2 - humans;
     this.dropBotsTo(want);
     const used = new Set([...this.cars.values()].map((c) => c.name));
@@ -136,6 +149,7 @@ export class Room {
   state() {
     return {
       code: this.code, kind: this.kind, host: this.host, phase: this.phase, settings: this.settings,
+      open: !!this.open, startAt: this.startAt, next: this.open && this.phase === 'results' ? this.nextTrack() : null,
       cars: [...this.cars.values()].map((c) => ({
         id: c.id, name: c.name, color: c.color, bot: c.bot, owner: c.owner, pad: c.pad, pts: c.pts, waiting: c.waiting,
       })),
@@ -170,7 +184,7 @@ export class Room {
     ping(client, msg) { this.send(client.id, { t: 'pong', c: msg.c, now: this.now() }); },
 
     set(client, msg) {
-      if (client.id !== this.host || (this.phase !== 'lobby' && this.phase !== 'results')) return;
+      if (this.open || client.id !== this.host || (this.phase !== 'lobby' && this.phase !== 'results')) return;
       const s = this.settings, v = msg.settings || {};
       if (TRACKS.some((t) => t.id === v.track)) s.track = v.track;
       if ([1, 3, 5, 7, 9].includes(v.laps)) s.laps = v.laps;
@@ -206,6 +220,7 @@ export class Room {
 
     st(client, msg) {
       if (!this.race || !Array.isArray(msg.c)) return;
+      client.drove = this.now();
       for (const a of msg.c) {
         if (!Array.isArray(a) || a.length !== 10 || !a.every(num)) continue;
         const car = this.ownCar(client, a[0]);
@@ -281,7 +296,9 @@ export class Room {
   };
 
   // The host runs the room; on a shared screen the first phone to join can too.
+  // Nobody runs an open room.
   mayRun(client) {
+    if (this.open) return false;
     if (client.id === this.host) return true;
     const firstPad = [...this.clients.values()].find((c) => c.role === 'pad');
     return this.kind === 'screen' && firstPad === client;
@@ -299,6 +316,7 @@ export class Room {
   }
 
   startRace() {
+    this.startAt = 0;
     for (const car of this.cars.values()) car.waiting = false;
     this.reconcileBots();
     const cars = [...this.cars.values()];
@@ -339,6 +357,7 @@ export class Room {
     order.forEach((car, i) => { car.gained = POINTS[i] || 0; car.pts += car.gained; });
     this.lastOrder = order.map((c) => c.id);
     this.phase = 'results';
+    if (this.open) this.startAt = this.now() + this.open.results;
     this.pushState();
     this.broadcast({
       t: 'results', mode: r.mode, track: r.track,
@@ -386,9 +405,37 @@ export class Room {
     }
   }
 
+  nextTrack() {
+    return TRACKS[(TRACKS.findIndex((t) => t.id === this.settings.track) + 1) % TRACKS.length].id;
+  }
+
+  // An open room runs itself: start when the clock says so, never let a race
+  // nobody is finishing hold everyone there, and clear out anyone who has gone.
+  tickOpen(now) {
+    if (this.phase === 'racing') {
+      const t0 = this.race.t0;
+      if (now - t0 > this.open.maxRace) { this.endRace(this.order()); return; }
+      // A closed tab or a pocketed phone stops sending. Its car would sit on the
+      // track, and its bots with it if it was the host, so the place goes.
+      for (const c of [...this.clients.values()]) {
+        const car = this.cars.get(c.car);
+        if (!car || car.waiting || now - Math.max(c.drove || 0, t0) <= this.open.away) continue;
+        this.send(c.id, { t: 'closed', away: true });
+        this.removeClient(c.id);
+        if (this.dead) return;
+      }
+    }
+    if ((this.phase !== 'lobby' && this.phase !== 'results') || !this.startAt || now < this.startAt) return;
+    if (this.phase === 'results') this.settings.track = this.nextTrack();
+    this.startRace();
+  }
+
   tick(dt = 1 / 15) {
-    const r = this.race, now = this.now();
-    if (!r || this.dead) return;
+    const now = this.now();
+    if (this.dead) return;
+    if (this.open) this.tickOpen(now);
+    const r = this.race;
+    if (!r) return;
     if (this.phase === 'countdown' && now >= r.t0) this.phase = 'racing';
     if (this.phase !== 'racing' && this.phase !== 'countdown') return;
 

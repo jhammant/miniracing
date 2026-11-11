@@ -1,6 +1,7 @@
 // End-to-end run in real Chrome against a real server: a solo race to the
-// flag, an elimination game, a full 16-car online room, a late joiner, and a
-// big-screen party with phones as pads. Needs `npm run build` first.
+// flag, an elimination game, a full 16-car online room, a late joiner, a
+// big-screen party with phones as pads, and two strangers in an open race.
+// Needs `npm run build` first.
 //   node test/e2e/run.js [name ...]     e.g. node test/e2e/run.js solo party
 
 import assert from 'node:assert/strict';
@@ -15,7 +16,11 @@ assert.ok(existsSync(new URL('../../dist/index.html', import.meta.url)), 'run `n
 const SHOTS = new URL('./shots/', import.meta.url).pathname;
 mkdirSync(SHOTS, { recursive: true });
 
-const server = await startServer({ port: 0, dataDir: mkdtempSync(join(tmpdir(), 'miniracing-e2e-')) });
+// Open rooms run on short clocks here, so the test does not sit through the real ones.
+const server = await startServer({
+  port: 0, dataDir: mkdtempSync(join(tmpdir(), 'miniracing-e2e-')),
+  open: { laps: 1, lobby: 6000, late: 3000, results: 8000 },
+});
 const url = `http://localhost:${server.port}`;
 const browser = await launch();
 const pages = [];
@@ -203,6 +208,37 @@ const tests = {
     await shot(tv, 'screen-race');
     await shot(pads[0], 'pad-race');
     await shot(pads[1], 'pad-race-portrait');
+  },
+
+  async quick() {
+    const a = await page('phone'), b = await page('desktop');
+    await shot(a, 'home-phone');
+    await a.fill('#name', 'ann');
+    await act(a, 'quick');
+    await a.waitForSelector('.lobby');
+    assert.match(await a.textContent('.lobby h2'), /OPEN RACE/);
+    await a.waitForFunction(() => /STARTS IN \d+/.test(document.querySelector('.lobby .soon')?.textContent));
+    assert.equal(await a.$('[data-act=start]'), null, 'nobody has a start button');
+    await b.fill('#name', 'bob');
+    await act(b, 'quick');
+    await b.waitForSelector('.lobby');
+    const room = (p) => p.evaluate(() => { const r = window.miniracing.session.room; return { code: r.code, track: r.settings.track, humans: r.cars.filter((c) => !c.bot).length, cars: r.cars.length }; });
+    await a.waitForFunction(() => window.miniracing.session.room.cars.filter((c) => !c.bot).length === 2);
+    const [ra, rb] = [await room(a), await room(b)];
+    assert.equal(rb.code, ra.code, 'both were put in the same room');
+    assert.deepEqual([rb.humans, rb.cars], [2, 8], 'two people and six bots');
+    await shot(a, 'quick-lobby-phone');
+    await shot(b, 'quick-lobby');
+    // Nobody presses anything: the race starts on the room's own clock.
+    for (const p of [a, b]) { await started(p); await autopilot(p); }
+    for (const p of [a, b]) await p.waitForSelector('.results', { timeout: 150000 });
+    await a.waitForFunction(() => / IN \d+/.test(document.querySelector('.results .soon')?.textContent));
+    await shot(a, 'quick-results-phone');
+    // ... and so does the next one, on the next track.
+    await b.waitForFunction((was) => { const r = window.miniracing.session.room; return r.phase !== 'results' && r.settings.track !== was; }, ra.track, { timeout: 30000 });
+    await started(b);
+    assert.notEqual((await room(a)).track, ra.track);
+    assert.equal(await b.$('.results'), null, 'the results made way for the race');
   },
 };
 

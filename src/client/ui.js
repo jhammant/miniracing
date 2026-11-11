@@ -65,11 +65,20 @@ export class UI {
 
   hide() { this.screen = null; this.root.className = ''; this.root.innerHTML = ''; }
 
+  // Counts down anything marked with the time it is waiting for (open rooms start by themselves).
+  clock(now) {
+    for (const el of this.root.querySelectorAll('[data-until]')) {
+      const text = `${el.dataset.pre}${Math.max(0, Math.ceil((el.dataset.until - now) / 1000))}`;
+      if (el.textContent !== text) el.textContent = text;
+    }
+  }
+
   act({ act, key, val }) {
     const h = this.h, room = this.room;
     switch (act) {
       case 'solo': h.solo(); break;
       case 'create': h.create(); break;
+      case 'quick': h.quick(); break;
       case 'screen': h.screen(); break;
       case 'join': {
         const code = (this.root.querySelector('#code')?.value || '').trim();
@@ -129,11 +138,12 @@ export class UI {
         <div class="menu">
           ${error ? `<p class="err">${esc(error)}</p>` : ''}
           ${code ? '' : '<button class="btn big primary" data-act="solo">SOLO RACE<small>YOU AGAINST THE BOTS</small></button>'}
+          ${code ? '' : '<button class="btn big" data-act="quick">PLAY ONLINE<small>AN OPEN RACE WITH ANYONE WHO JOINS</small></button>'}
           <div class="joinrow${code ? ' hot' : ''}">
             <input id="code" maxlength="4" value="${esc(code)}" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code">
             <button class="btn${code ? ' primary' : ''}" data-act="join">JOIN ROOM</button>
           </div>
-          ${code ? '<button class="btn big" data-act="solo">SOLO RACE<small>YOU AGAINST THE BOTS</small></button>' : ''}
+          ${code ? '<button class="btn big" data-act="solo">SOLO RACE<small>YOU AGAINST THE BOTS</small></button><button class="btn big" data-act="quick">PLAY ONLINE<small>AN OPEN RACE WITH ANYONE WHO JOINS</small></button>' : ''}
           <button class="btn big" data-act="create">HOST A ROOM<small>UP TO 16, EVERYONE ON THEIR OWN SCREEN</small></button>
           <button class="btn big" data-act="screen">BIG SCREEN PARTY<small>ONE TV, PHONES AS CONTROLLERS</small></button>
           <div class="row"><button class="btn" data-act="records">RECORDS</button><button class="btn" data-act="settings">SETTINGS</button></div>
@@ -146,14 +156,15 @@ export class UI {
   // `room` is the latest room message; `me` says who we are in it.
   lobby(room, me) {
     this.room = room; this.me = me; this.inRace = false;
-    const s = room.settings, host = me.id === room.host, solo = room.kind === 'solo', screen = room.kind === 'screen';
-    const humans = room.cars.filter((c) => !c.bot), elim = s.mode === 'elim';
+    const s = room.settings, host = me.id === room.host && !room.open, solo = room.kind === 'solo', screen = room.kind === 'screen';
+    const humans = room.cars.filter((c) => !c.bot), elim = s.mode === 'elim', track = room.next || s.track;
+    const soon = room.startAt ? `<span class="soon" data-until="${Number(room.startAt)}" data-pre="${room.next ? 'NEXT RACE IN ' : 'STARTS IN '}"></span>` : '<span class="soon">STARTING…</span>';
     const url = `${location.origin}/?j=${room.code}`;
-    const title = solo ? 'SOLO RACE' : screen ? 'BIG SCREEN PARTY' : `ROOM ${esc(room.code)}`;
+    const title = solo ? 'SOLO RACE' : screen ? 'BIG SCREEN PARTY' : room.open ? 'OPEN RACE' : `ROOM ${esc(room.code)}`;
     const invite = solo ? '' : `
       <section class="card invite">
         ${qrSvg(url)}
-        <div><small>${screen ? 'SCAN TO USE YOUR PHONE AS A PAD' : 'SCAN OR SHARE TO JOIN'}</small>
+        <div><small>${screen ? 'SCAN TO USE YOUR PHONE AS A PAD' : room.open ? 'ANYONE CAN JOIN. SCAN OR SHARE TO BRING A FRIEND' : 'SCAN OR SHARE TO JOIN'}</small>
         <div class="code">${esc(room.code)}</div><small class="url">${esc(location.host)}</small></div>
       </section>`;
     const players = `
@@ -165,9 +176,9 @@ export class UI {
     const setup = `
       <section class="card setup">
         <div class="tracks${host ? '' : ' ro'}">${TRACKS.map((t) => `
-          <button data-act="set" data-key="track" data-val="${t.id}" class="${t.id === s.track ? 'on' : ''}" style="--c:${t.color}"${host ? '' : ' disabled'}>
+          <button data-act="set" data-key="track" data-val="${t.id}" class="${t.id === track ? 'on' : ''}" style="--c:${t.color}"${host ? '' : ' disabled'}>
             ${trackThumb(t.id)}<b>${esc(t.name.toUpperCase())}</b></button>`).join('')}</div>
-        <p class="blurb">${esc(trackById(s.track).blurb)}${store.pbs[s.track] ? ` &nbsp;YOUR BEST ${fmtTime(store.pbs[s.track])}` : ''}</p>
+        <p class="blurb">${esc(trackById(track).blurb)}${store.pbs[track] ? ` &nbsp;YOUR BEST ${fmtTime(store.pbs[track])}` : ''}</p>
         <div class="opts">
           <label>MODE</label>${seg('mode', [['race', 'RACE'], ['elim', 'ELIMINATION']], s.mode, host)}
           <label>${elim ? 'ROUNDS TO WIN' : 'LAPS'}</label>${stepper('laps', s.laps, host, s.laps > LAPS[0], s.laps < LAPS[LAPS.length - 1])}
@@ -182,14 +193,15 @@ export class UI {
     this.show('lobby', `
       <div class="lobby${solo ? ' solo' : ''}">
         <header><button class="btn back" data-act="leave">◀ LEAVE</button><h2>${title}</h2>
-          ${host ? `<button class="btn primary go" data-act="start"${canStart ? '' : ' disabled'}>START ▶</button>` : '<span class="wait">WAITING FOR THE HOST…</span>'}</header>
+          ${host ? `<button class="btn primary go" data-act="start"${canStart ? '' : ' disabled'}>START ▶</button>` : room.open ? soon : '<span class="wait">WAITING FOR THE HOST…</span>'}</header>
         <div class="cols">${invite}${players}${setup}</div>
       </div>`);
   }
 
   results(msg, room, me) {
     this.room = room; this.me = me; this.inRace = false;
-    const host = me.id === room.host, elim = msg.mode === 'elim', track = trackById(msg.track);
+    const host = me.id === room.host && !room.open, elim = msg.mode === 'elim', track = trackById(msg.track);
+    const soon = room.open && room.startAt && room.next ? `<span class="soon" data-until="${Number(room.startAt)}" data-pre="${esc(trackById(room.next).name.toUpperCase())} IN "></span>` : '';
     const rows = msg.order.map((c, i) => `
       <tr class="${c.id === me.car ? 'me' : ''}">
         <td class="p">${ordinal(i + 1)}</td>
@@ -207,7 +219,7 @@ export class UI {
           <tbody>${rows}</tbody></table></div>
         <div class="row">
           <button class="btn" data-act="leave">LEAVE</button>
-          ${host ? '<button class="btn" data-act="tolobby">CHANGE TRACK</button><button class="btn primary" data-act="start">RACE AGAIN ▶</button>' : '<span class="wait">WAITING FOR THE HOST…</span>'}
+          ${host ? '<button class="btn" data-act="tolobby">CHANGE TRACK</button><button class="btn primary" data-act="start">RACE AGAIN ▶</button>' : room.open ? soon : '<span class="wait">WAITING FOR THE HOST…</span>'}
         </div>
       </div>`);
   }

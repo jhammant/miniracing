@@ -37,6 +37,7 @@ const ui = new UI($('ui'), {
   click: () => { unlock(); audio.sfx('click'); },
   solo: () => open('solo'),
   create: () => open('party'),
+  quick: () => open('quick'),
   screen: () => open('screen'),
   join: (code) => open('party', code),
   leave: () => { close(); home(); },
@@ -113,7 +114,7 @@ async function open(kind, code) {
     wire(s);
     return;
   }
-  ui.busy(code ? `JOINING ${code}…` : 'OPENING A ROOM…');
+  ui.busy(code ? `JOINING ${code}…` : kind === 'quick' ? 'FINDING A RACE…' : 'OPENING A ROOM…');
   const s = session = { kind, code, conn: new WsConn() };
   wire(s);
   try { await s.conn.connect(); } catch {
@@ -121,7 +122,7 @@ async function open(kind, code) {
     return;
   }
   if (session !== s) { s.conn.close(); return; }
-  s.conn.send(code ? { t: 'join', code, ...me } : { t: 'create', kind, ...me });
+  s.conn.send(code ? { t: 'join', code, ...me } : kind === 'quick' ? { t: 'quick', ...me } : { t: 'create', kind, ...me });
 }
 
 function startDemo() {
@@ -150,7 +151,7 @@ function onMessage(s, m) {
   if (s !== session && s !== demo) return;
   switch (m.t) {
     case 'error': if (s === session) { close(); home({ error: m.error.toUpperCase(), code: s.code }); } return;
-    case 'closed': if (s === session) { close(); home({ error: 'THE ROOM HAS CLOSED' }); } return;
+    case 'closed': if (s === session) { close(); home({ error: m.away ? 'YOU WERE AWAY, SO YOUR PLACE WENT TO SOMEONE ELSE' : 'THE ROOM HAS CLOSED' }); } return;
     case 'joined': joined(s, m); return;
     default:
   }
@@ -346,6 +347,7 @@ function frame(now) {
   let game = s?.game || null;
   if (game) game.frame(dt);
   if (takePauseTap()) toggleMenu();
+  if (session && ui.screen) ui.clock(session.conn.now());
   if (game && (!game.race || s.room.phase === 'lobby')) game = null; // nothing on track to show
   scene.update(game, dt, viewFor(s, game));
   fx.update(game, dt);
