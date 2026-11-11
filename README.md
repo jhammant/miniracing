@@ -78,6 +78,7 @@ All by environment variable, none of them secret.
 ```bash
 npm test             # race simulation, room rules and server, no browser
 npm run build && npm run test:e2e
+BASE_URL=https://your.host node test/e2e/live.js   # smoke test of a deployed copy
 ```
 
 The end-to-end run drives real Chrome (through `playwright-core`, using the
