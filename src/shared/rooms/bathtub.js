@@ -4,7 +4,7 @@ import { row } from './util.js';
 
 export default {
   id: 'bathtub',
-  name: 'The Bathtub',
+  name: 'Bathtub',
   room: 'Bathroom',
   blurb: 'Ducks have right of way. Squeeze past the soap, and mind the plughole.',
   vehicle: 'boat',
