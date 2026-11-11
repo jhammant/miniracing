@@ -5,8 +5,8 @@
 
 import { getWorld, updateMovers } from '../shared/world.js';
 import { makeCar, placeCar, stepCar, collideCars, updateSlipstream, packCar, unpackCar, DT } from '../shared/physics.js';
-import { bakeAI, makeBot, botInput, botWantsItem } from '../shared/ai.js';
-import { TUNING, rocketPos } from '../shared/items.js';
+import { bakeAI, makeBot, botInput, botWantsItem, botWantsShot } from '../shared/ai.js';
+import { TUNING, SHELL, rocketPos, shellPos } from '../shared/items.js';
 import { COLORS, ELIM, LIGHTS } from '../shared/room.js';
 import { wrapAngle } from '../shared/track.js';
 
@@ -32,6 +32,7 @@ export class Game {
     this.raceT = 0;
     this.order = [];
     this.inp = { steer: 0, throttle: 0, brake: 0 };
+    this.pt = { x: 0, z: 0 };
     this.emit = (type, car, data) => this.carEvent(type, car, data);
   }
 
@@ -68,7 +69,7 @@ export class Game {
     car.s = ((car.total % track.len) + track.len) % track.len;
     car.lapsDone = Math.max(0, Math.floor(car.total / track.len));
     car.frozen = !this.started || car.out;
-    car.boostT = car.shieldT = car.spinT = car.squashT = car.shrinkT = car.fallT = car.invT = 0;
+    car.boostT = car.shieldT = car.spinT = car.squashT = car.shrinkT = car.fallT = car.invT = car.pushT = car.drift = car.reloadT = 0;
   }
 
   // ---- race lifecycle -----------------------------------------------------
@@ -82,7 +83,7 @@ export class Game {
     this.bots.clear();
     this.started = false; this.step = 0; this.acc = 0;
     for (const car of this.cars.values()) {
-      Object.assign(car, { active: false, item: null, laps: 0, best: 0, lastLap: 0, lapStart: 0, wins: 0, finPos: 0, finished: false, out: false, lapsDone: 0, catchup: 0, pickT: 0, lights: r.lights?.[car.id] ?? LIGHTS.start });
+      Object.assign(car, { active: false, item: null, laps: 0, best: 0, lastLap: 0, lapStart: 0, wins: 0, finPos: 0, finished: false, out: false, lapsDone: 0, catchup: 0, pickT: 0, reloadT: 0, lights: r.lights?.[car.id] ?? LIGHTS.start });
     }
     this.placeGrid(r);
     this.on('race', { race: r, world: this.world, joining });
@@ -134,6 +135,7 @@ export class Game {
         break;
       case 'boxon': this.boxes[m.i] = true; this.on('boxOn', m.i); break;
       case 'use': if (car) this.applyUse(car, m); break;
+      case 'fire': if (car) this.applyFire(car, m); break;
       case 'hit': this.applyHit(car, m); break;
       case 'hzoff': { const hz = this.hazards.get(m.id); this.hazards.delete(m.id); if (hz) this.on('hazardGone', { hz, fizzle: true }); break; }
       case 'lapd':
@@ -185,6 +187,14 @@ export class Game {
     this.on('use', { car, kind: m.kind, x: m.x ?? car.x, z: m.z ?? car.z, hz: m.hz, targets: m.targets });
   }
 
+  applyFire(car, m) {
+    this.hazards.set(m.hz.id, m.hz);
+    // The gun kicks.
+    if (car.local) { car.vx -= Math.sin(m.hz.h) * 2.5; car.vz -= Math.cos(m.hz.h) * 2.5; }
+    car.kick = 1;
+    this.on('fire', { car, hz: m.hz });
+  }
+
   applyHit(car, m) {
     const hz = this.hazards.get(m.hz);
     this.hazards.delete(m.hz);
@@ -192,7 +202,7 @@ export class Game {
     if (!car) return;
     if (car.local) {
       if (m.blocked) car.shieldT = 0;
-      else if (m.kind === 'rocket') { car.spinT = TUNING.spinT; car.vx *= 0.35; car.vz *= 0.35; } else car.spinT = TUNING.oilSpinT;
+      else if (m.kind === 'rocket') { car.spinT = TUNING.spinT; car.vx *= 0.35; car.vz *= 0.35; } else if (m.kind === 'shell') { car.spinT = SHELL.spinT; car.vx *= SHELL.slow; car.vz *= SHELL.slow; } else car.spinT = TUNING.oilSpinT;
     }
     this.on('hit', { car, kind: m.kind, blocked: m.blocked, by: this.cars.get(m.by) });
   }
@@ -209,9 +219,16 @@ export class Game {
     if (this.race.mode === 'race' && !car.finished) this.conn.send({ t: 'lap', car: car.id, n: car.laps + 1, ms });
   }
 
+  // The item button: the power-up you hold, or in a tank with none, the gun.
   useItem(car) {
-    if (!car.item || car.out || car.finished || !this.started) return;
+    if (car.out || car.finished || !this.started) return;
     const fx = Math.sin(car.h), fz = Math.cos(car.h);
+    if (!car.item) {
+      if (!this.world.veh.gun || car.reloadT > 0 || car.spinT > 0 || car.fallT > 0 || this.phase === 'results') return;
+      car.reloadT = SHELL.reload;
+      this.conn.send({ t: 'fire', car: car.id, x: car.x + fx * 1.8, z: car.z + fz * 1.8, h: car.h });
+      return;
+    }
     // Oil drops behind the car; everything else happens where the car is.
     const back = car.item === 'oil' ? 2.6 : 0;
     this.conn.send({ t: 'use', car: car.id, x: car.x - fx * back, z: car.z - fz * back, s: car.s, lat: car.lat });
@@ -269,8 +286,9 @@ export class Game {
       } else {
         const bot = this.driverFor(car);
         botInput(car, bot, world, all, DT, car.bot ? human : null, inp);
-        if (car.bot && car.item && botWantsItem(car, bot, car.item, all, DT)) this.useItem(car);
+        if (car.bot && (car.item ? botWantsItem(car, bot, car.item, all, DT) : world.veh.gun && botWantsShot(car, bot, all, DT))) this.useItem(car);
       }
+      if (car.reloadT > 0) car.reloadT -= DT;
       car.catchup = race.catchup && !car.bot && !car.finished ? clamp((lead - car.total) / 160, 0, 1) * 0.13 : 0;
       stepCar(car, inp, DT, world, this.emit);
     }
@@ -317,6 +335,10 @@ export class Game {
           if (hz.by === car.id || age < 0.15) continue;
           const p = rocketPos(world.track, hz, age);
           x = p.x; z = p.z; reach = 2;
+        } else if (hz.kind === 'shell') {
+          if (hz.by === car.id) continue;
+          const p = shellPos(hz, age, this.pt);
+          x = p.x; z = p.z; reach = SHELL.reach;
         } else if (hz.by === car.id && age < 0.8) continue;
         if (Math.hypot(car.x - x, car.z - z) > reach) continue;
         hz.claimed = true;

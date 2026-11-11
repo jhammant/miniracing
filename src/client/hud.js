@@ -2,7 +2,7 @@
 // countdown and pop-up messages. Plain DOM over the canvas; elements are only
 // touched when their value changes.
 
-import { ITEMS } from '../shared/items.js';
+import { ITEMS, SHELL } from '../shared/items.js';
 import { LIGHTS, CUP } from '../shared/room.js';
 import { store, fmtTime, ordinal, esc } from './store.js';
 
@@ -116,11 +116,14 @@ export class Hud {
       put(el.best, elim ? `ALL ${LIGHTS.total} LIGHTS WINS` : f.best ? `BEST ${fmtTime(f.best)}` : pb ? `PB ${fmtTime(pb)}` : '');
     }
 
-    // Item slot: on phones the item button itself shows what you hold.
-    const item = own ? mine.item : null;
+    // Item slot: on phones the item button itself shows what you hold. A tank
+    // with nothing in it shows its gun, dimmed while that reloads.
+    const item = !own ? null : mine.item || (game.world.veh.gun && !mine.finished && !mine.out ? 'shell' : null);
+    const wait = item === 'shell' && mine.reloadT > 0;
+    if (el.slot._wait !== wait) { el.slot._wait = wait; el.slot.classList.toggle('wait', wait); if (el.padItem) el.padItem.classList.toggle('wait', wait); }
     if (el.slot._item !== item) {
       el.slot._item = item;
-      const info = item ? ITEMS[item] : null;
+      const info = item === 'shell' ? SHELL : item ? ITEMS[item] : null;
       el.slotGlyph.textContent = info ? info.glyph : ''; el.slotName.textContent = info ? info.name : '';
       el.slot.style.setProperty('--c', info ? info.color : 'transparent');
       el.slot.classList.toggle('has', !!info);

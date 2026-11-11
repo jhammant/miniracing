@@ -44,3 +44,14 @@ export const TUNING = {
 export function rocketPos(track, hz, age) {
   return track.pointAt(hz.s + TUNING.rocketSpeed * age, hz.lat);
 }
+
+// What a tank fires. A shell flies dead straight from the barrel for `life`
+// seconds, so its path is known from the shot alone. `reload` is seconds
+// between shots; a hit spins the tank for `spinT` and leaves it `slow` of its speed.
+export const SHELL = { name: 'SHELL', color: '#7d8f3c', glyph: '◉', speed: 60, life: 0.9, reload: 1.4, spinT: 0.6, slow: 0.5, reach: 2.1 };
+
+export function shellPos(hz, age, out = {}) {
+  out.x = hz.x + Math.sin(hz.h) * SHELL.speed * age;
+  out.z = hz.z + Math.cos(hz.h) * SHELL.speed * age;
+  return out;
+}

@@ -1,16 +1,21 @@
-// Short-lived things: dust, flames, sparks, confetti, shockwave rings, and the
-// rockets and oil slicks that live on the track for a while.
+// Short-lived things: dust, flames, sparks, confetti, shockwave rings, the skid
+// marks a slide leaves, and the rockets, shells and oil slicks that live on the
+// track for a while.
 
 import * as THREE from 'three';
-import { buildRocket, buildOil } from './models.js';
-import { rocketPos, TUNING } from '../shared/items.js';
+import { buildRocket, buildOil, buildShell } from './models.js';
+import { rocketPos, shellPos, TUNING } from '../shared/items.js';
+import { SLIDE } from '../shared/physics.js';
 
-const MAX = 520, RINGS = 10;
+const MAX = 520, RINGS = 10, MARKS = 1600, MARK_STEP = 0.7;
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (list) => list[(Math.random() * list.length) | 0];
 const CONFETTI = ['#e63946', '#3a86ff', '#ffbe0b', '#2ec4b6', '#f72585', '#8ac926', '#ffffff'];
 const FIRE = ['#fff3b0', '#ffbe0b', '#fb5607', '#e63946'];
 const SMOKE = ['#f5f5f5', '#d9d9d9', '#bdbdbd'];
+const SPARKS = ['#fff3b0', '#ffbe0b', '#ff9f1c'];
+const SPRAY = ['#ffffff', '#d8f4ff', '#a8e4f4'];
+const RUBBER = new THREE.Color('#17131f'), WAKE = new THREE.Color('#ffffff');
 
 export class Fx {
   constructor(scene) {
@@ -28,9 +33,17 @@ export class Fx {
       scene.root.add(m);
       return { m, t: 0, life: 0, r: 1 };
     });
+    // Skid marks: flat strips on the surface, the oldest reused when they run out.
+    this.marks = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.3, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), MARKS);
+    this.marks.setColorAt(0, RUBBER);
+    this.marks.frustumCulled = false; this.marks.count = 0; this.marks.renderOrder = 1;
+    this.markN = 0;
+    this.skids = new Map(); // car id -> where its back wheels last left a mark, and how long it has been sliding
+    scene.root.add(this.marks);
     this.hazards = new Map();
     this.m4 = new THREE.Matrix4(); this.q = new THREE.Quaternion(); this.e = new THREE.Euler();
-    this.v = new THREE.Vector3(); this.s = new THREE.Vector3(); this.c = new THREE.Color();
+    this.v = new THREE.Vector3(); this.s = new THREE.Vector3(); this.c = new THREE.Color(); this.pt = { x: 0, z: 0 };
   }
 
   clear() {
@@ -38,6 +51,7 @@ export class Fx {
     for (const h of this.hazards.values()) this.scene.root.remove(h.mesh);
     this.hazards.clear();
     for (const r of this.rings) r.m.visible = false;
+    this.marks.count = 0; this.markN = 0; this.skids.clear();
   }
 
   // ---- emitters -------------------------------------------------------------
@@ -58,6 +72,17 @@ export class Fx {
     const r = this.rings.reduce((a, b) => (!b.m.visible || b.t / b.life > a.t / a.life ? b : a));
     r.m.visible = true; r.m.material.color.set(color); r.m.position.set(x, 0.25, z);
     r.t = 0; r.life = life; r.r = radius;
+  }
+
+  // One strip of skid mark from (ax, az) to (bx, bz).
+  mark(ax, az, bx, bz, width, color) {
+    const { marks, m4, q, e, v, s } = this, i = this.markN++ % MARKS;
+    const dx = bx - ax, dz = bz - az;
+    m4.compose(v.set((ax + bx) / 2, 0.035, (az + bz) / 2), q.setFromEuler(e.set(0, Math.atan2(dx, dz), 0)), s.set(width, 1, Math.hypot(dx, dz) + 0.08));
+    marks.setMatrixAt(i, m4);
+    marks.setColorAt(i, color);
+    marks.count = Math.min(MARKS, this.markN);
+    marks.instanceMatrix.needsUpdate = true; marks.instanceColor.needsUpdate = true;
   }
 
   confetti(x, z, n = 60) {
@@ -83,9 +108,22 @@ export class Fx {
           for (const id of d.targets || []) { const t = this.gameCar?.(id); if (t) this.burst(t.x, 1, t.z, { n: 12, colors: ['#b388ff', '#fff', '#7b2cbf'], speed: 6, up: 8, life: 0.5, size: 0.28 }); }
         } else if (d.kind === 'shield') this.ring(d.x, d.z, '#4cc9f0', 4, 0.4);
         break;
+      case 'fire': {
+        const sh = Math.sin(d.hz.h), ch = Math.cos(d.hz.h);
+        for (let i = 0; i < 9; i++) this.spawn(d.hz.x, 0.7, d.hz.z, sh * rand(4, 16) + rand(-2, 2), rand(-0.5, 2), ch * rand(4, 16) + rand(-2, 2), rand(0.1, 0.22), rand(0.3, 0.55), pick(FIRE));
+        this.burst(d.hz.x, 0.7, d.hz.z, { n: 6, colors: SMOKE, speed: 3, up: 2.5, life: 0.6, size: 0.4, grav: -1, grow: 1.4 });
+        break;
+      }
+      case 'push':
+        this.burst(car.x - Math.sin(car.h), 0.4, car.z - Math.cos(car.h), { n: 12, colors: this.wet ? SPRAY : SPARKS, speed: 7, up: 4, life: 0.3, size: 0.26, grav: 6 });
+        break;
       case 'hit':
         if (d.blocked) this.burst(car.x, 1, car.z, { n: 16, colors: ['#4cc9f0', '#fff'], speed: 10, up: 6, life: 0.4, size: 0.3 });
-        else if (d.kind === 'rocket') {
+        else if (d.kind === 'shell') {
+          this.burst(car.x, 0.8, car.z, { n: 22, colors: FIRE, speed: 11, up: 9, life: 0.45, size: 0.45, grav: 12 });
+          this.burst(car.x, 1, car.z, { n: 8, colors: ['#555', '#777', '#333'], speed: 4, up: 6, life: 0.8, size: 0.6, grav: -2, grow: 1.2 });
+          this.ring(car.x, car.z, '#ff9f1c', 4.5, 0.3);
+        } else if (d.kind === 'rocket') {
           this.burst(car.x, 0.8, car.z, { n: 30, colors: FIRE, speed: 13, up: 10, life: 0.55, size: 0.55, grav: 10 });
           this.burst(car.x, 1, car.z, { n: 12, colors: ['#555', '#777', '#333'], speed: 5, up: 7, life: 1, size: 0.7, grav: -2, grow: 1.2 });
           this.ring(car.x, car.z, '#ffbe0b', 6, 0.35);
@@ -147,19 +185,45 @@ export class Fx {
     }
   }
 
-  // Flames behind boosting cars, dust from sliding and off-road wheels.
+  // Flames behind boosting cars, dust from sliding and off-road wheels, and
+  // what a powerslide leaves: smoke, marks on the surface, then sparks once it
+  // has been held long enough to pay out.
   trails(game, dt) {
-    const dust = this.scene.theme?.dust || '#eee';
+    const dust = this.scene.theme?.dust || '#eee', V = game.world.veh, wet = this.wet = game.world.def.vehicle === 'boat';
     for (const car of game.cars.values()) {
-      if (!car.active || car.out || car.waiting || car.fallT > 0) continue;
-      const sh = Math.sin(car.h), ch = Math.cos(car.h), sp = Math.hypot(car.vx, car.vz);
-      const bx = car.x - sh * 1.0, bz = car.z - ch * 1.0;
+      let sk = this.skids.get(car.id);
+      if (!car.active || car.out || car.waiting || car.fallT > 0) { if (sk) sk.on = false; continue; }
+      const x = car.rx ?? car.x, z = car.rz ?? car.z, h = car.rh ?? car.h;
+      const sh = Math.sin(h), ch = Math.cos(h), sp = Math.hypot(car.vx, car.vz);
+      const bx = x - sh * 1.0, bz = z - ch * 1.0;
+      const slip = Math.abs(car.vx * ch - car.vz * sh);
+      const skidding = V.slide > 0 && car.y <= 0.05 && sp > 6 && (car.drift ? true : slip > (wet ? 10 : 9) || (car.spinT > 0 && !wet));
+      if (skidding) {
+        if (!sk) { sk = { on: false, t: 0, x: [0, 0], z: [0, 0] }; this.skids.set(car.id, sk); }
+        for (let i = 0; i < 2; i++) {
+          const side = i ? 0.55 : -0.55, wx = bx + ch * side, wz = bz - sh * side;
+          if (!sk.on) { sk.x[i] = wx; sk.z[i] = wz; continue; }
+          if (Math.hypot(wx - sk.x[i], wz - sk.z[i]) < MARK_STEP) continue;
+          this.mark(sk.x[i], sk.z[i], wx, wz, wet ? 0.5 : 0.28, wet ? WAKE : RUBBER);
+          sk.x[i] = wx; sk.z[i] = wz;
+        }
+        sk.on = true;
+        sk.t = car.drift ? sk.t + dt : 0;
+        if (car.drift && Math.random() < dt * (wet ? 26 : 36)) {
+          const side = Math.random() < 0.5 ? -0.55 : 0.55, hot = sk.t >= SLIDE.hold;
+          if (hot && Math.random() < 0.55) this.spawn(bx + ch * side, 0.2, bz - sh * side, -car.vx * 0.15 + rand(-2, 2), rand(2, 5), -car.vz * 0.15 + rand(-2, 2), rand(0.15, 0.3), rand(0.14, 0.22), pick(wet ? SPRAY : SPARKS), 14);
+          else if (wet) this.spawn(bx + ch * side, 0.15, bz - sh * side, rand(-1.5, 1.5), rand(1.5, 3), rand(-1.5, 1.5), rand(0.25, 0.45), rand(0.16, 0.26), pick(SPRAY), 9);
+          else this.spawn(bx + ch * side, 0.2, bz - sh * side, rand(-1, 1), rand(0.8, 2), rand(-1, 1), rand(0.35, 0.6), rand(0.26, 0.4), pick(SMOKE), -1, 1, 1.6);
+        }
+      } else if (sk) { sk.on = false; sk.t = 0; }
+      if (car.pushT > 0 && Math.random() < dt * 60) {
+        this.spawn(bx + rand(-0.4, 0.4), 0.35, bz + rand(-0.4, 0.4), -sh * 4 + car.vx * 0.3, rand(0, 1.5), -ch * 4 + car.vz * 0.3, rand(0.12, 0.22), rand(0.2, 0.32), pick(wet ? SPRAY : SPARKS));
+      }
       if (car.boostT > 0 && Math.random() < dt * 70) {
         this.spawn(bx + rand(-0.3, 0.3), 0.45, bz + rand(-0.3, 0.3), -sh * 5 + car.vx * 0.3, rand(0, 2), -ch * 5 + car.vz * 0.3, rand(0.18, 0.32), rand(0.3, 0.5), pick(FIRE));
       }
       if (car.y > 0.05) continue;
-      const slide = Math.abs(car.vx * ch - car.vz * sh);
-      if ((slide > 7 || (car.offT > 0 && sp > 9) || car.spinT > 0) && Math.random() < dt * 34) {
+      if (!car.drift && (slip > 9 || (car.offT > 0 && sp > 9) || car.spinT > 0) && Math.random() < dt * 34) {
         const side = Math.random() < 0.5 ? -0.5 : 0.5;
         this.spawn(bx + ch * side, 0.15, bz - sh * side, rand(-1, 1), rand(1, 2.5), rand(-1, 1), rand(0.35, 0.6), rand(0.3, 0.45), dust, -1, 1, 1.4);
       }
@@ -174,7 +238,7 @@ export class Fx {
     for (const hz of game.hazards.values()) {
       let h = this.hazards.get(hz.id);
       if (!h) {
-        const mesh = hz.kind === 'rocket' ? buildRocket() : buildOil();
+        const mesh = hz.kind === 'rocket' ? buildRocket() : hz.kind === 'shell' ? buildShell() : buildOil();
         if (hz.kind === 'oil') { mesh.position.set(hz.x, 0.02, hz.z); mesh.rotation.y = hz.id * 2.4; mesh.renderOrder = 2; }
         this.scene.root.add(mesh);
         h = { mesh, t: 0 };
@@ -185,6 +249,10 @@ export class Fx {
         const p = rocketPos(track, hz, Math.max(0, (now - hz.t0) / 1000));
         h.mesh.position.set(p.x, 0, p.z); h.mesh.rotation.y = p.h;
         if (Math.random() < dt * 60) this.spawn(p.x - Math.sin(p.h) * 0.9, 0.7, p.z - Math.cos(p.h) * 0.9, rand(-1, 1), rand(0, 1.5), rand(-1, 1), rand(0.3, 0.5), rand(0.25, 0.4), pick(Math.random() < 0.3 ? FIRE : SMOKE), -1, 1, 1.5);
+      } else if (hz.kind === 'shell') {
+        const p = shellPos(hz, Math.max(0, (now - hz.t0) / 1000), this.pt);
+        h.mesh.position.set(p.x, 0.7, p.z); h.mesh.rotation.y = hz.h;
+        if (Math.random() < dt * 90) this.spawn(p.x, 0.7, p.z, rand(-0.5, 0.5), rand(0, 1), rand(-0.5, 0.5), rand(0.15, 0.3), rand(0.18, 0.28), pick(SMOKE), -1, 1, 1.2);
       } else {
         const k = Math.min(1, h.t * 5), fade = Math.min(1, Math.max(0, (hz.until - now) / 800));
         h.mesh.scale.setScalar(Math.max(0.01, k * fade));

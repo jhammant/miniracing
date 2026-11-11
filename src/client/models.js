@@ -1167,6 +1167,14 @@ export function buildRocket() {
   return g;
 }
 
+// A tank shell, nose to +Z, centred on its own middle. It glows so it reads as a tracer.
+export function buildShell() {
+  const g = new THREE.Group();
+  add(g, cyl(0.17, 0.17, 0.5, 8), mat('#ff9f1c', { glow: 1 }), 0, 0, -0.1, HALF).castShadow = false;
+  add(g, cyl(0, 0.17, 0.32, 8), mat('#fff3b0', { glow: 1 }), 0, 0, 0.31, HALF).castShadow = false;
+  return g;
+}
+
 // Glossy black oil slick, radius about 2.2, top at y = 0.055.
 export function buildOil() {
   const g = new THREE.Group(), oil = mat('#111018', { gloss: 120 });

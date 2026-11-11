@@ -70,7 +70,7 @@ const SKILL = { easy: [0.78, 0.9], normal: [0.87, 0.97], hard: [0.94, 1.03] };
 export function makeBot(seed, difficulty = 'normal') {
   const [lo, hi] = SKILL[difficulty] || SKILL.normal;
   const r = (k) => { const x = Math.sin(seed * 12.9898 + k * 78.233) * 43758.5453; return x - Math.floor(x); };
-  return { skill: lo + (hi - lo) * r(1), lane: (r(2) - 0.5) * 3.6, band: 0, stuckT: 0, revT: 0, revDir: 1, itemT: 0, seed };
+  return { skill: lo + (hi - lo) * r(1), lane: (r(2) - 0.5) * 3.6, band: 0, stuckT: 0, revT: 0, revDir: 1, itemT: 0, shotT: 1.5 + 3 * r(3), seed };
 }
 
 // `others` are the cars this bot can see; `humanTotal` is the progress of the
@@ -89,7 +89,11 @@ export function botInput(car, bot, world, others, dt, humanTotal, out) {
   }
   if (!car.frozen && Math.abs(speed) < 2.5 && car.spinT <= 0 && car.fallT <= 0) {
     bot.stuckT += dt;
-    if (bot.stuckT > 1.1) { bot.stuckT = 0; bot.revT = 0.75; bot.revDir = car.lat > 0 ? -1 : 1; bot.stuckCount = (bot.stuckCount || 0) + 1; }
+    if (bot.stuckT > 1.1) {
+      // Back up further each time it does not work: a fluffed jump needs a proper run-up.
+      bot.stuckCount = (bot.stuckCount || 0) + 1;
+      bot.stuckT = 0; bot.revT = 0.75 * Math.min(4, bot.stuckCount); bot.revDir = car.lat > 0 ? -1 : 1;
+    }
   } else { bot.stuckT = 0; if (speed > 12) bot.stuckCount = 0; }
 
   // Rubber band: ease off when well ahead of the humans, push when behind.
@@ -146,4 +150,20 @@ export function botWantsItem(car, bot, item, others, dt) {
           : bot.itemT > 2; // shield, zap
   if (fire) bot.itemT = 0;
   return fire;
+}
+
+// Tanks: fire when someone is sitting in front of the barrel. Bots take their
+// time over it, the better ones a little less.
+export function botWantsShot(car, bot, others, dt) {
+  bot.shotT -= dt;
+  if (bot.shotT > 0 || car.spinT > 0) return false;
+  const fx = Math.sin(car.h), fz = Math.cos(car.h);
+  for (const o of others) {
+    if (o === car || o.out || o.finished || o.fallT > 0) continue;
+    const dx = o.x - car.x, dz = o.z - car.z, f = dx * fx + dz * fz;
+    if (f < 5 || f > 38 || Math.abs(dx * fz - dz * fx) > 1.2 + f * 0.05) continue;
+    bot.shotT = 5.5 - 1.5 * bot.skill + ((bot.shots = (bot.shots || 0) + 1) % 3) * 0.8;
+    return true;
+  }
+  return false;
 }

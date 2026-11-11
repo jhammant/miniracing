@@ -262,7 +262,9 @@ function onGame(s, type, d) {
   const car = d && d.car, mine = !!car && car.id === s.me.car, screen = s.me.role === 'screen';
   switch (type) {
     case 'regrid': hud.clearBanner(); fx.clear(); s.count = 4; hud.toast(`ROUND ${d.race.round}`, 'big'); break;
-    case 'go': if (game.raceT < 1.5) { hud.go(); audio.sfx('go'); } break;
+    case 'go':
+      if (game.raceT < 1.5) { hud.go(); audio.sfx('go'); if (game.world.veh.gun && game.cars.get(s.me.car)) hud.toast('NO POWER-UP? THE BUTTON FIRES YOUR GUN', 'item', 3000); }
+      break;
     case 'pickup':
       if (mine) { audio.sfx('pickup'); hud.toast(ITEMS[d.item].name, 'item'); } else sfxAt(s, 'pickup', car, 0.4);
       break;
@@ -270,10 +272,16 @@ function onGame(s, type, d) {
       sfxAt(s, USE_SFX[d.kind], car);
       if (d.kind === 'mallet' || d.kind === 'zap') { const f = game.focus(); if (f && Math.hypot(f.x - d.x, f.z - d.z) < 30) scene.shake(d.kind === 'mallet' ? 0.9 : 0.4); }
       break;
-    case 'hit':
-      sfxAt(s, d.blocked ? 'shieldPop' : d.kind === 'rocket' ? 'explode' : 'spin', car);
-      if (mine && !d.blocked) { scene.shake(d.kind === 'rocket' ? 1 : 0.5); navigator.vibrate?.(80); }
+    case 'fire':
+      sfxAt(s, 'cannon', car, mine ? 1 : 0.7);
+      if (mine) { scene.shake(0.25); navigator.vibrate?.(20); }
       break;
+    case 'hit':
+      sfxAt(s, d.blocked ? 'shieldPop' : d.kind === 'rocket' || d.kind === 'shell' ? 'explode' : 'spin', car);
+      if (mine && !d.blocked) { scene.shake(d.kind === 'rocket' ? 1 : d.kind === 'shell' ? 0.8 : 0.5); navigator.vibrate?.(80); }
+      break;
+    case 'slide': if (mine && game.world.def.vehicle !== 'boat') audio.sfx('slide'); break;
+    case 'push': sfxAt(s, 'push', car, mine ? 1 : 0.5); if (mine) navigator.vibrate?.(15); break;
     case 'squashed': sfxAt(s, 'squash', car); if (mine) navigator.vibrate?.(60); break;
     case 'shieldPop': sfxAt(s, 'shieldPop', car); break;
     case 'lap':
@@ -384,9 +392,10 @@ function sounds(s, game) {
     });
   }
   let skid = 0;
-  if (mine && mine === f && mine.y <= 0.05 && game.started) {
+  // Tyres squeal; hulls, tracks and rotors do not.
+  if (mine && mine === f && mine.y <= 0.05 && game.started && (game.world.def.vehicle || 'car') === 'car') {
     const slide = Math.abs(mine.vx * Math.cos(mine.h) - mine.vz * Math.sin(mine.h));
-    skid = clamp((slide - 5) / 9, 0, 1);
+    skid = clamp((slide - 7) / 10, 0, 1) * (mine.drift ? 1 : 0.6);
   }
   audio.skid(skid);
 }

@@ -264,6 +264,8 @@ tr.me td.n { color: var(--gold); }
 .slot small { font-size: 8px; min-height: 12px; }
 .slot.has { opacity: 1; }
 .slot.has .glyph { background: var(--c); animation: pop 0.25s; }
+.slot.has.wait { opacity: 0.45; }
+.slot.wait .glyph { animation: none; }
 .wrong { position: absolute; top: 27%; left: 0; right: 0; text-align: center; font-size: 18px; color: var(--pink); display: none; }
 .wrong.on { display: block; animation: blink 0.5s steps(2) infinite; }
 .watch { position: absolute; left: 0; right: 0; bottom: calc(96px + var(--sb)); text-align: center; font-size: 9px; color: var(--gold); }
@@ -327,6 +329,7 @@ tr.me td.n { color: var(--gold); }
 #touch .tb.item { bottom: calc(112px + var(--sb)); opacity: 0.4; }
 .tb.item .glyph { font: 34px/1 system-ui, sans-serif; color: var(--night); }
 .tb.item.has { opacity: 1 !important; background: var(--c); border-color: var(--night); animation: pop 0.25s; }
+.tb.item.has.wait { opacity: 0.45 !important; animation: none; }
 #touch .tb.horn { width: 56px; height: 56px; bottom: calc(210px + var(--sb)); right: calc(27px + var(--sr)); font-size: 7px; opacity: 0.75; }
 @media (max-height: 420px) {
   #touch .tb { width: 74px; height: 74px; }

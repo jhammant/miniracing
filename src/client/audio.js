@@ -133,6 +133,16 @@ const SFX = {
     hiss(v, t, 0.7, 0.5, { type: 'lowpass', f: 3600, to: 150, q: 0.7, buf: crunchBuf, rateTo: 0.25 });
     tone(v, t, 'sine', 130, 0.35, 0.6, { to: 32 });
   },
+  cannon: (v, t) => {
+    hiss(v, t, 0.3, 0.5, { type: 'lowpass', f: 3000, to: 200, q: 0.8, buf: crunchBuf, rateTo: 0.4 });
+    tone(v, t, 'sine', 190, 0.22, 0.6, { to: 40 });
+    tone(v, t, 'square', 95, 0.06, 0.18, { to: 50 });
+  },
+  slide: (v, t) => hiss(v, t, 0.2, 0.2, { f: 1700, to: 2700, q: 8, a: 0.01 }),
+  push: (v, t) => {
+    hiss(v, t, 0.36, 0.22, { f: 600, to: 3200, q: 1.5, a: 0.04, sus: 0.3 });
+    tone(v, t, 'sawtooth', 160, 0.3, 0.1, { to: 480, a: 0.02, sus: 0.4 });
+  },
   oil: (v, t) => { hiss(v, t, 0.22, 0.4, { type: 'lowpass', f: 2400, to: 180, q: 9 }); tone(v, t, 'triangle', 260, 0.16, 0.3, { to: 70 }); },
   spin: (v, t) => tone(v, t, 'square', 950, 0.55, 0.15, { to: 180, vib: 120, vibRate: 13, sus: 0.2 }),
   shield: (v, t) => {

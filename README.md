@@ -18,10 +18,18 @@ Play it at <https://miniracing.hammantlabs.com>.
   | Bathtub | boats | rubber ducks, a submarine, a cut past the soap |
   | Garden path | helicopters | they float over the bumps and take the corners wide |
   | Garage workbench | cars | a plank jump and a long drop off the bench |
-  | School desk | tanks | ruler jumps, rolling pencils, a cut across the exercise book |
+  | School desk | tanks | each other's shells, ruler jumps, rolling pencils, a cut across the exercise book |
   | Pool table | cars | pool balls on the move |
 
 - **Up to 16 vehicles** in a race. Bots fill the grid if you want them.
+- **Powerslides**: tap the brake with the wheel hard over and the tail steps
+  out. The car turns tighter than it can by gripping, leaves rubber on the
+  floor, and if you hold the slide for half a second it pays you a short push
+  when you straighten up. Boats do a gentler version; tanks and helicopters
+  do not slide.
+- **Tanks shoot**: on the school desk the power-up button fires a shell from
+  the turret whenever you are not holding a power-up. A hit spins the other
+  tank round; a shield stops it.
 - **Twelve drivers** to pick from. Your driver's face is on the lobby list and
   the podium (pleased if they won, less so if they did not), and each one has
   their own horn.
@@ -64,7 +72,8 @@ Play it at <https://miniracing.hammantlabs.com>.
 | Steer | ◀ ▶ or A D | left and right pads |
 | Accelerate | ▲ or W | automatic (can be turned off in settings) |
 | Brake / reverse | ▼ or S | BRAKE |
-| Use power-up | Space, Shift, X or Enter | the round button above BRAKE |
+| Powerslide | tap brake while steering | tap BRAKE while steering |
+| Use power-up, or fire a tank's gun | Space, Shift, X or Enter | the round button beside BRAKE |
 | Horn | H | HORN |
 | Menu | Esc or P | the pause button |
 

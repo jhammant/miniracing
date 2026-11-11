@@ -28,8 +28,9 @@ export default {
     { m: 'house', x: 30, z: -34 }, { m: 'house', x: -70, z: 32 }, { m: 'house', x: 72, z: 34 },
     { m: 'house', x: -30, z: -30 }, { m: 'house', x: -10, z: 24 },
     { m: 'bookRamp', at: [0.075, 0], face: true },
-    { m: 'brick', at: [0.1, -3.4], c: '#e8503a' }, { m: 'brick', at: [0.1, 0], c: '#f2c230', rot: 0.2 },
-    { m: 'brick', at: [0.1, 3.4], c: '#3a7bd5' },
+    // Close enough behind the ramp that a car at half speed still clears them.
+    { m: 'brick', at: [0.087, -3.4], c: '#e8503a' }, { m: 'brick', at: [0.087, 0], c: '#f2c230', rot: 0.2 },
+    { m: 'brick', at: [0.087, 3.4], c: '#3a7bd5' },
     { m: 'crayon', at: [0.3, -3.2], rot: 0.5, c: '#1f9d55' },
     { m: 'crayon', at: [0.66, 3], rot: -0.6, c: '#e8503a' },
     { m: 'pond', at: [0.41, 2.4] },

@@ -6,7 +6,8 @@
 
 import { TRACKS, trackById } from './tracks.js';
 import { getWorld } from './world.js';
-import { rollItem, TUNING, ITEMS } from './items.js';
+import { rollItem, TUNING, ITEMS, SHELL } from './items.js';
+import { vehicleOf } from './vehicles.js';
 import { DRIVERS, cleanDriver } from './drivers.js';
 
 export const MAX_CARS = 16;
@@ -303,9 +304,23 @@ export class Room {
     hit(client, msg) {
       const r = this.race, car = this.ownCar(client, msg.car);
       const hz = r && r.hazards.get(msg.hz);
-      if (!car || !hz || (hz.kind === 'rocket' && hz.by === car.id)) return;
+      if (!car || !hz || ((hz.kind === 'rocket' || hz.kind === 'shell') && hz.by === car.id)) return;
       r.hazards.delete(hz.id);
       this.broadcast({ t: 'hit', car: car.id, hz: hz.id, kind: hz.kind, by: hz.by, blocked: !!msg.blocked });
+    },
+
+    // Tanks only: a shell from the barrel, as often as the gun reloads. It has
+    // to start near where the room last heard the tank was.
+    fire(client, msg) {
+      const r = this.race, car = this.ownCar(client, msg.car), now = this.now();
+      if (!car || !r || this.phase !== 'racing' || !vehicleOf(trackById(r.track)).gun) return;
+      if (car.out || car.finished || car.waiting || ![msg.x, msg.z, msg.h].every(num)) return;
+      if (now - (car.fireAt || -1e9) < SHELL.reload * 1000 - 150) return;
+      if (!car.st || Math.hypot(msg.x - car.st[1], msg.z - car.st[2]) > 15) return;
+      car.fireAt = now;
+      const hz = { id: ++r.hzSeq, kind: 'shell', by: car.id, x: msg.x, z: msg.z, h: msg.h, t0: now, until: now + SHELL.life * 1000 };
+      r.hazards.set(hz.id, hz);
+      this.broadcast({ t: 'fire', car: car.id, hz });
     },
 
     // Purely for show: everyone hears it, nothing else happens.
@@ -540,10 +555,10 @@ export class Room {
 
     if (this.kind === 'screen' && now - this.lastPadSt > 400) {
       this.lastPadSt = now;
-      const order = this.order();
+      const order = this.order(), gun = vehicleOf(trackById(r.track)).gun;
       for (const c of this.clients.values()) {
         const car = c.role === 'pad' && this.cars.get(c.car);
-        if (car) this.send(c.id, { t: 'padst', pos: order.indexOf(car) + 1, of: order.length, lap: Math.min(r.laps, car.lapsDone + 1), laps: r.laps, item: car.item, out: car.out, fin: car.finished, mode: r.mode, wins: car.wins || 0, lights: car.lights, lives: this.cup ? car.lives : undefined });
+        if (car) this.send(c.id, { t: 'padst', pos: order.indexOf(car) + 1, of: order.length, lap: Math.min(r.laps, car.lapsDone + 1), laps: r.laps, item: car.item || (gun && !car.finished ? 'shell' : null), out: car.out, fin: car.finished, mode: r.mode, wins: car.wins || 0, lights: car.lights, lives: this.cup ? car.lives : undefined });
       }
     }
   }

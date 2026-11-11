@@ -4,8 +4,9 @@ import { TRACKS } from '../src/shared/tracks.js';
 import { PROPS } from '../src/shared/props.js';
 import { getWorld, updateMovers } from '../src/shared/world.js';
 import { VEHICLES } from '../src/shared/vehicles.js';
-import { makeCar, placeCar, stepCar, packCar, unpackCar, DT, P } from '../src/shared/physics.js';
-import { rollItem, itemWeights, ITEM_IDS } from '../src/shared/items.js';
+import { makeCar, placeCar, stepCar, packCar, unpackCar, DT, P, SLIDE } from '../src/shared/physics.js';
+import { rollItem, itemWeights, ITEM_IDS, SHELL, shellPos } from '../src/shared/items.js';
+import { makeBot, botWantsShot } from '../src/shared/ai.js';
 import { simulate } from '../scripts/sim.js';
 
 const noop = () => {};
@@ -69,6 +70,96 @@ test('every room races a known vehicle, and a tank turns on the spot where a car
   assert.ok(turned('snooker') < 0.01, 'a car does not');
 });
 
+// Nothing but floor in every direction, to measure handling on.
+const plane = (veh) => ({
+  veh, def: { offMult: 1, edge: 'wall' }, zones: [], solids: [], movers: [], cuts: [], hx: 1e7, hz: 1e7,
+  track: { hw: 1e6, len: 1e12, step: 1, n: 1, sx: [0], sz: [0], tx: [0], tz: [1], nearest: () => 0, along: () => 0, lat: () => 0 },
+});
+// Drive flat out on full lock for `secs`, with a brake tap first if `tap`.
+function corner(kind, { speed = VEHICLES[kind].maxSpeed, tap = false, secs = 1, release = 0 } = {}) {
+  const world = plane(VEHICLES[kind]), car = makeCar(1), seen = [];
+  car.frozen = false; car.vz = speed;
+  let slip = 0, slowest = speed, x = 0;
+  const step = (inp) => {
+    stepCar(car, inp, DT, world, (t) => seen.push(t));
+    const fx = Math.sin(car.h), fz = Math.cos(car.h);
+    slip = Math.max(slip, Math.abs(Math.atan2(car.vx * fz - car.vz * fx, car.vx * fx + car.vz * fz)));
+    slowest = Math.min(slowest, Math.hypot(car.vx, car.vz));
+    x = Math.max(x, Math.abs(car.x));
+  };
+  for (let t = 0; t < secs; t += DT) step(tap && t < 0.06 ? { steer: 1, throttle: 0, brake: 1 } : { steer: 1, throttle: 1, brake: 0 });
+  let top = 0;
+  for (let t = 0; t < release; t += DT) { step({ steer: 0, throttle: 1, brake: 0 }); top = Math.max(top, Math.hypot(car.vx, car.vz)); }
+  return { car, seen, slip, slowest, x, top, turned: Math.abs(car.h) };
+}
+
+test('a brake tap in a corner starts a powerslide that turns tighter than gripping, without spinning out', () => {
+  // Arrange / Act
+  const grip = corner('car'), slide = corner('car', { tap: true });
+  // Assert
+  assert.ok(!grip.seen.includes('slide') && grip.car.drift === 0, 'no tap, no slide');
+  assert.deepEqual(slide.seen, ['slide']);
+  assert.ok(slide.car.drift !== 0, 'still sliding while the wheel is held over');
+  assert.ok(slide.turned > grip.turned * 1.25, `slide turned ${slide.turned.toFixed(2)} rad against ${grip.turned.toFixed(2)}`);
+  assert.ok(slide.slip > 0.5 && slide.slip < 1.05, `tail out but caught: ${(slide.slip * 57.3).toFixed(0)} degrees`);
+  assert.ok(slide.slowest > VEHICLES.car.maxSpeed * 0.75, `keeps its speed: ${slide.slowest.toFixed(1)}`);
+  assert.ok(grip.slip > 0.2, 'even gripping, the tail comes round at top speed');
+});
+
+test('letting a held slide go pays a short push; a quick flick does not', () => {
+  // Arrange / Act
+  const held = corner('car', { tap: true, secs: SLIDE.hold + 0.3, release: 1 });
+  const flick = corner('car', { tap: true, secs: SLIDE.hold - 0.2, release: 1 });
+  // Assert
+  assert.deepEqual(held.seen, ['slide', 'push']);
+  assert.ok(held.top > VEHICLES.car.maxSpeed * 1.08, `push takes it past top speed: ${held.top.toFixed(1)}`);
+  assert.deepEqual(flick.seen, ['slide']);
+  assert.ok(flick.top <= VEHICLES.car.maxSpeed + 0.01);
+  assert.equal(held.car.drift, 0);
+});
+
+test('slides need speed and wheels: not below the threshold, never in a tank or a helicopter, milder in a boat', () => {
+  // Arrange / Act
+  const slow = corner('car', { tap: true, speed: SLIDE.from - 2 });
+  const tank = corner('tank', { tap: true }), heli = corner('heli', { tap: true }), boat = corner('boat', { tap: true, speed: 22 });
+  // Assert
+  for (const r of [slow, tank, heli]) assert.ok(!r.seen.includes('slide'));
+  assert.ok(boat.seen.includes('slide'));
+  assert.ok(VEHICLES.boat.slide < VEHICLES.car.slide);
+});
+
+test('going sideways is never quicker than going straight', () => {
+  // Arrange
+  const world = plane(VEHICLES.car), car = makeCar(1);
+  car.frozen = false; car.vz = VEHICLES.car.maxSpeed;
+  let top = 0;
+  // Act: weave flat out for five seconds
+  for (let i = 0; i < 300; i++) {
+    stepCar(car, { steer: Math.floor(i / 20) % 2 ? 1 : -1, throttle: 1, brake: 0 }, DT, world, noop);
+    top = Math.max(top, Math.hypot(car.vx, car.vz));
+  }
+  // Assert
+  assert.ok(top <= VEHICLES.car.maxSpeed + 0.05, `weaving reached ${top.toFixed(2)}`);
+});
+
+test('a shell flies straight from the barrel, and a bot only fires at a tank in front of it', () => {
+  // Arrange
+  const hz = { x: 2, z: 3, h: Math.PI / 2 }, bot = makeBot(3), me = makeCar(1);
+  const target = Object.assign(makeCar(2), { x: 0.5, z: 20 }), beside = Object.assign(makeCar(3), { x: 14, z: 20 });
+  bot.shotT = 0;
+  // Act
+  const p = shellPos(hz, 0.5);
+  const atNothing = botWantsShot(me, bot, [me, beside], DT);
+  const atTarget = botWantsShot(me, bot, [me, beside, target], DT);
+  const again = botWantsShot(me, bot, [me, target], DT);
+  // Assert
+  assert.ok(Math.abs(p.x - (2 + SHELL.speed * 0.5)) < 1e-9 && Math.abs(p.z - 3) < 1e-9);
+  assert.equal(atNothing, false);
+  assert.equal(atTarget, true);
+  assert.equal(again, false, 'then it has to reload');
+  assert.ok(bot.shotT >= SHELL.reload);
+});
+
 test('the toast is harmless in the air, flattens whoever it lands on, then goes away', () => {
   // Arrange
   const world = getWorld('breakfast'), toast = world.movers.find((m) => m.kind === 'pop'), seen = [];
@@ -126,6 +217,11 @@ test('car state survives the wire format', () => {
   unpackCar(other, JSON.parse(JSON.stringify(packCar(car))));
   assert.equal(other.tx, 12.35); assert.equal(other.th, 1.5); assert.equal(other.total, 99.5);
   assert.ok(other.boostT > 0 && other.shieldT > 0 && other.out && !other.finished && other.spinT === 0);
+  assert.ok(!other.drift && !other.pushT);
+  // A sliding car says so, so everyone else can draw the smoke.
+  Object.assign(car, { drift: -1, pushT: 0.4 });
+  unpackCar(other, JSON.parse(JSON.stringify(packCar(car))));
+  assert.ok(other.drift && other.pushT > 0);
 });
 
 test('the leader never rolls a shrink ray and the back of the field gets more turbo', () => {

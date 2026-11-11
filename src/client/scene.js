@@ -387,11 +387,17 @@ export class Scene {
       const sp = Math.hypot(car.vx, car.vz), ud = v.body.userData;
       const up = V.hover * clamp((v.flat - 0.28) / 0.72, 0, 1);
       v.body.position.y = up + (V.hover ? Math.sin(this.t * 3 + car.id) * 0.12 : ud.bob ? Math.sin(this.t * 4 + car.id * 1.7) * 0.05 : 0);
-      v.roll = lerp(v.roll, car.steer * Math.min(1, sp / 20) * (V.hover ? 0.3 : ud.bob ? 0.2 : 0.09), k);
+      v.roll = lerp(v.roll, car.steer * Math.min(1, sp / 20) * (V.hover ? 0.3 : ud.bob ? 0.2 : car.drift ? 0.2 : 0.09), k);
       v.body.rotation.z = v.roll;
       v.body.rotation.x = car.fallT > 0 ? car.spin * 0.7 : V.hover ? 0.16 * Math.min(1, sp / V.maxSpeed) : -clamp(y * 0.12, 0, 0.3);
       if (ud.wheels) { ud.wheels[0].rotation.y = ud.wheels[1].rotation.y = -car.steer * 0.45; }
-      if (ud.turret) ud.turret.rotation.y = lerp(ud.turret.rotation.y, -car.steer * 0.5, k);
+      if (ud.turret) {
+        // The gun fires along the hull, so the turret only glances into a turn; it jumps back when it fires.
+        ud.turret.rotation.y = lerp(ud.turret.rotation.y, -car.steer * 0.15, k);
+        v.kick = car.kick ? 1 : lerp(v.kick || 0, 0, k);
+        car.kick = 0;
+        ud.turret.position.z = (ud.turretZ ??= ud.turret.position.z) - v.kick * 0.22;
+      }
       if (ud.spin) for (const s of ud.spin) s.o.rotation[s.axis] += s.rate * dt;
       if (car.shieldT > 0 && !v.shield) { v.shield = buildShield(); v.group.add(v.shield); }
       if (v.shield) {

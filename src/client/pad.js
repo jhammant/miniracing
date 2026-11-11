@@ -2,7 +2,7 @@
 // horn buttons, and a line of status. The race itself is drawn on the shared screen.
 
 import { bindPad } from './input.js';
-import { ITEMS } from '../shared/items.js';
+import { ITEMS, SHELL } from '../shared/items.js';
 import { COLORS, LIGHTS } from '../shared/room.js';
 import { ordinal } from './store.js';
 
@@ -82,10 +82,10 @@ export class Pad {
   setItem(item) {
     if (this.item === item) return;
     this.item = item;
-    const info = item ? ITEMS[item] : null;
+    const info = item === 'shell' ? SHELL : item ? ITEMS[item] : null;
     this.el.glyph.textContent = info ? info.glyph : '';
     this.el.item.classList.toggle('has', !!info);
     this.el.item.style.setProperty('--c', info ? info.color : '');
-    if (info) navigator.vibrate?.(25);
+    if (info && item !== 'shell') navigator.vibrate?.(25);
   }
 }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Room, MAX_CARS, OPEN, cleanName, ELIM, LIGHTS } from '../src/shared/room.js';
 import { DRIVERS } from '../src/shared/drivers.js';
 import { TRACKS, trackById } from '../src/shared/tracks.js';
+import { SHELL } from '../src/shared/items.js';
 
 function setup(kind = 'party', settings) {
   const sent = [], clock = { t: 1000 };
@@ -114,6 +115,55 @@ test('a rocket becomes a hazard that the victim reports, once', () => {
   room.onMessage('b', { t: 'hit', car: b.id, hz: hz.id });
   room.onMessage('b', { t: 'hit', car: b.id, hz: hz.id });
   assert.equal(sent.filter((m) => m.t === 'hit').length / 2, 1);
+});
+
+test('tanks fire shells: only in a tank room, from where the tank is, no faster than the reload, and never at yourself', () => {
+  // Arrange
+  const { room, sent, clock, go } = setup('party', { bots: 0, track: 'desk' });
+  room.addClient('b', {});
+  go();
+  const a = carOf(room, 'a'), b = carOf(room, 'b');
+  const fires = () => sent.filter((m) => m.t === 'fire' && m.id === 'a');
+  const shot = { t: 'fire', car: a.id, x: 5, z: 1, h: 0.3 };
+  // Act / Assert: nothing until the room knows where the tank is, and not from the far side of the desk
+  room.onMessage('a', shot);
+  assert.equal(fires().length, 0);
+  room.onMessage('a', { t: 'st', c: [st(a, 4, 0)] });
+  room.onMessage('a', { ...shot, x: 60 });
+  room.onMessage('a', { ...shot, h: 'north' });
+  room.onMessage('b', shot);
+  assert.equal(fires().length, 0, 'not from somewhere else, not with junk, not from another player');
+  room.onMessage('a', shot);
+  room.onMessage('a', shot);
+  assert.equal(fires().length, 1, 'one shot per reload');
+  const hz = fires()[0].hz;
+  assert.deepEqual({ kind: hz.kind, by: hz.by, x: hz.x, h: hz.h }, { kind: 'shell', by: a.id, x: 5, h: 0.3 });
+  // Its own shell cannot hit it; the other tank reports the hit once
+  room.onMessage('a', { t: 'hit', car: a.id, hz: hz.id });
+  assert.equal(room.race.hazards.size, 1);
+  room.onMessage('b', { t: 'hit', car: b.id, hz: hz.id });
+  room.onMessage('b', { t: 'hit', car: b.id, hz: hz.id });
+  assert.deepEqual(sent.filter((m) => m.t === 'hit' && m.id === 'a').map((m) => [m.car, m.kind, m.by]), [[b.id, 'shell', a.id]]);
+  // Reloaded: fire again, and a shell that hits nothing goes away by itself
+  clock.t += SHELL.reload * 1000;
+  room.onMessage('a', shot);
+  assert.equal(fires().length, 2);
+  clock.t += SHELL.life * 1000 + 1; room.tick();
+  assert.equal(room.race.hazards.size, 0);
+  assert.ok(sent.some((m) => m.t === 'hzoff'));
+});
+
+test('cars have no gun', () => {
+  // Arrange
+  const { room, sent, go } = setup('party', { bots: 0, track: 'snooker' });
+  go();
+  const a = carOf(room, 'a');
+  room.onMessage('a', { t: 'st', c: [st(a, 4, 0)] });
+  // Act
+  room.onMessage('a', { t: 'fire', car: a.id, x: 4, z: 0, h: 0 });
+  // Assert
+  assert.equal(sent.filter((m) => m.t === 'fire').length, 0);
+  assert.equal(room.race.hazards.size, 0);
 });
 
 test('elimination: fall behind the leader and you are out; first to the target wins', () => {

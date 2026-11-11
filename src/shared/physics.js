@@ -8,6 +8,16 @@ export const DT = 1 / 60;
 // The same for everything that races. How each kind of vehicle handles is in
 // vehicles.js, and a world carries its room's as `world.veh`.
 export const P = { g: 22, boost: 1.45, jump: 8.5, offLimit: 12 };
+// The powerslide: tap the brake while turning and the tail steps out. It turns
+// tighter than gripping does, holds its speed, and a slide held for `hold`
+// seconds pays out a short push when the steering is let go.
+//   from, until  speeds a slide starts above and dies below
+//   tap          seconds a brake tap stays good for
+//   turn         extra steering rate while sliding
+//   angle        grip per unit of steering rate: sets how far sideways it gets
+//   most         the furthest sideways it goes, radians
+//   brake        how much of the brake a tap is worth in a slide
+export const SLIDE = { from: 13, until: 9, tap: 0.2, turn: 0.55, angle: 1.5, most: 0.95, brake: 0.3, hold: 0.5, push: 1.15, pushT: [0.35, 1] };
 
 // How fast a vehicle can rotate at a given forward speed. The bots use the same
 // curve to work out how fast a corner can be taken.
@@ -24,6 +34,7 @@ export function makeCar(id) {
     idx: 0, s: 0, lat: 0, total: 0, lapsDone: 0,
     boostT: 0, shieldT: 0, spinT: 0, squashT: 0, shrinkT: 0, fallT: 0, invT: 0,
     offT: 0, wrongT: 0, slipT: 0, slip: false, catchup: 0, onCut: false, cutK: 0,
+    drift: 0, driftT: 0, driftOff: 0, brakeT: 0, tapT: 0, pushT: 0,
     frozen: true, finished: false, out: false, local: true,
   };
 }
@@ -38,6 +49,7 @@ export function placeCar(car, world, s, lat = 0) {
     idx: p.i, s: ((s % track.len) + track.len) % track.len, lat, total: s,
     boostT: 0, shieldT: 0, spinT: 0, squashT: 0, shrinkT: 0, fallT: 0, invT: 0,
     offT: 0, wrongT: 0, slipT: 0, slip: false, onCut: false,
+    drift: 0, driftT: 0, driftOff: 0, brakeT: 0, tapT: 0, pushT: 0,
   });
 }
 
@@ -49,11 +61,12 @@ export function respawn(car, world, emit) {
   car.total += ds; car.s = car.idx * track.step; car.lat = 0;
   car.x = p.x; car.z = p.z; car.h = p.h; car.y = 0; car.vy = 0; car.vx = 0; car.vz = 0;
   car.fallT = 0; car.spinT = 0; car.offT = 0; car.wrongT = 0; car.invT = 1.6;
+  car.drift = 0; car.pushT = 0;
   emit('respawn', car);
 }
 
 function startFall(car, emit) {
-  car.fallT = 1.1; car.vy = 0; car.spinT = 0; car.boostT = 0;
+  car.fallT = 1.1; car.vy = 0; car.spinT = 0; car.boostT = 0; car.drift = 0; car.pushT = 0;
   emit('fall', car);
 }
 
@@ -122,11 +135,12 @@ function findCut(world, car) {
 }
 
 // One fixed step for one car. `inp` = { steer: -1..1 (+ = right), throttle, brake }.
-// `emit(type, car, data)` reports fall | respawn | bump | jump | land | pad | squashed | lap.
+// `emit(type, car, data)` reports fall | respawn | bump | jump | land | pad | squashed | lap |
+// slide (a powerslide starts) | push (one pays out).
 export function stepCar(car, inp, dt, world, emit) {
   const { track, veh: V } = world, hover = V.hover > 0;
   car.px = car.x; car.pz = car.z; car.py = car.y; car.ph = car.h;
-  for (const k of ['boostT', 'shieldT', 'spinT', 'squashT', 'shrinkT', 'invT']) if (car[k] > 0) car[k] = Math.max(0, car[k] - dt);
+  for (const k of ['boostT', 'shieldT', 'spinT', 'squashT', 'shrinkT', 'invT', 'pushT', 'tapT']) if (car[k] > 0) car[k] = Math.max(0, car[k] - dt);
 
   if (car.fallT > 0) {
     car.fallT -= dt;
@@ -143,12 +157,40 @@ export function stepCar(car, inp, dt, world, emit) {
   let steer = 0, throttle = 0, brake = 0;
   if (car.spinT > 0) car.spin += 15 * dt;
   else { car.spin = 0; steer = inp.steer; throttle = inp.throttle; brake = inp.brake; }
-  car.steer += clamp(steer - car.steer, -dt * 9, dt * 9);
+  car.steer += clamp(steer - car.steer, -dt * 14, dt * 14);
+
+  let fx = Math.sin(car.h), fz = Math.cos(car.h);
+  let vf = car.vx * fx + car.vz * fz;
+  const sp = Math.abs(vf);
+
+  // Powerslide: a fresh tap of the brake with the wheel hard over starts one,
+  // and it lasts for as long as the wheel stays over.
+  if (brake > 0) { if (car.brakeT === 0) car.tapT = SLIDE.tap; car.brakeT += dt; } else car.brakeT = 0;
+  const dir = Math.sign(steer);
+  if (car.drift) {
+    car.driftOff = dir === car.drift ? 0 : car.driftOff + dt;
+    if (car.spinT > 0 || vf < SLIDE.until) car.drift = 0;
+    else if (car.driftOff > 0.12) {
+      if (car.driftT >= SLIDE.hold) { car.pushT = clamp(car.driftT * 0.5, SLIDE.pushT[0], SLIDE.pushT[1]); emit('push', car); }
+      car.drift = 0;
+    } else if (!air) car.driftT += dt;
+  } else if (V.slide > 0 && !air && car.tapT > 0 && dir && car.steer * dir > 0.5 && vf > SLIDE.from) {
+    car.drift = dir; car.driftT = 0; car.driftOff = 0; car.tapT = 0;
+    emit('slide', car);
+  }
+  let turn = turnRate(sp, V);
+  if (car.drift) {
+    // Steer harder than grip allows, but ease off as the tail comes right
+    // round, so holding the wheel over gives a slide and not a spin.
+    const out = Math.abs(Math.atan2(car.vx * fz - car.vz * fx, vf));
+    turn *= (1 + SLIDE.turn * V.slide) * (1 - clamp((out - SLIDE.most + 0.25) / 0.25, 0, 0.85));
+  }
+  const slideGrip = SLIDE.angle * turnRate(sp, V) * (1 + SLIDE.turn * V.slide);
 
   // Surface
   const off = world.def.offMult + (1 - world.def.offMult) * V.rough;
   let maxMult = Math.abs(car.lat) <= track.hw + 0.3 ? 1 : off;
-  let grip = V.grip, accelMult = 1;
+  let grip = car.drift ? slideGrip : V.grip * (1 - V.loose * Math.min(1, sp / V.maxSpeed)), accelMult = 1;
   if (!air) {
     for (const zn of world.zones) {
       if (!inZone(car, zn)) continue;
@@ -161,6 +203,7 @@ export function stepCar(car, inp, dt, world, emit) {
     }
   }
   if (car.boostT > 0) { maxMult = Math.max(maxMult, 0.85) * P.boost; accelMult = 2.6; }
+  else if (car.pushT > 0) { maxMult *= SLIDE.push; accelMult = 2; }
   if (car.squashT > 0) maxMult *= 0.5;
   if (car.shrinkT > 0) maxMult *= 0.6;
   if (car.slip) maxMult *= 1.07;
@@ -168,20 +211,29 @@ export function stepCar(car, inp, dt, world, emit) {
   const maxV = V.maxSpeed * maxMult;
 
   // Steering turns the nose; grip then drags the velocity round to follow it.
-  let fx = Math.sin(car.h), fz = Math.cos(car.h);
-  let vf = car.vx * fx + car.vz * fz;
-  const sp = Math.abs(vf);
-  if (!air) car.h = wrapAngle(car.h - car.steer * turnRate(sp, V) * (vf < 0 ? -1 : 1) * dt);
+  if (!air) car.h = wrapAngle(car.h - car.steer * turn * (vf < 0 ? -1 : 1) * dt);
   fx = Math.sin(car.h); fz = Math.cos(car.h);
   const lx = fz, lz = -fx;
   vf = car.vx * fx + car.vz * fz;
   let vl = car.vx * lx + car.vz * lz;
   if (!air) {
-    if (throttle > 0 && vf < maxV) vf = Math.min(maxV, vf + V.accel * accelMult * throttle * dt * (vf < 0 ? 2 : 1));
+    // Grip kills the sideways slide. A loose vehicle keeps part of that speed
+    // going forwards, so sliding does not cost it the corner.
+    const was = Math.hypot(vf, vl);
+    vl *= Math.exp(-(brake > 0 && sp > 8 && !car.drift ? grip * 0.45 : grip) * dt);
+    if (V.carry > 0 && vf > 0) {
+      const now = Math.hypot(vf, vl);
+      if (now > 0.5) { const k = 1 + V.carry * (was / now - 1); vf *= k; vl *= k; }
+    }
+    // The engine tops out on speed over the ground, so going sideways is never the quick way.
+    const top = Math.sqrt(Math.max(0, maxV * maxV - vl * vl));
+    if (throttle > 0 && vf < top) vf = Math.min(top, vf + V.accel * accelMult * throttle * dt * (vf < 0 ? 2 : 1));
     if (vf > maxV) vf -= Math.min(vf - maxV, ((vf - maxV) * 4 + 6) * dt);
-    if (brake > 0) vf = vf > 0.5 ? Math.max(0, vf - V.brake * brake * dt) : Math.max(-V.reverse, vf - 14 * brake * dt);
+    if (brake > 0) {
+      const b = V.brake * brake * (car.drift && car.brakeT < 0.3 ? SLIDE.brake : 1);
+      vf = vf > 0.5 ? Math.max(0, vf - b * dt) : Math.max(-V.reverse, vf - 14 * brake * dt);
+    }
     if (throttle === 0 && brake === 0) vf -= vf * Math.min(1, V.drag * dt);
-    vl *= Math.exp(-(brake > 0 && sp > 8 ? grip * 0.45 : grip) * dt);
   }
   car.vx = fx * vf + lx * vl; car.vz = fz * vf + lz * vl;
 
@@ -288,7 +340,7 @@ export function updateSlipstream(own, all, dt) {
 export function packCar(c) {
   const f = (c.boostT > 0 ? 1 : 0) | (c.shieldT > 0 ? 2 : 0) | (c.spinT > 0 ? 4 : 0) | (c.squashT > 0 ? 8 : 0)
     | (c.shrinkT > 0 ? 16 : 0) | (c.fallT > 0 ? 32 : 0) | (c.invT > 0 ? 64 : 0) | (c.finished ? 128 : 0)
-    | (c.out ? 256 : 0) | (c.slip ? 512 : 0);
+    | (c.out ? 256 : 0) | (c.slip ? 512 : 0) | (c.drift ? 1024 : 0) | (c.pushT > 0 ? 2048 : 0);
   const r = (v) => Math.round(v * 100) / 100;
   return [c.id, r(c.x), r(c.z), r(c.y), r(c.h), r(c.vx), r(c.vz), f, r(c.total), r(c.steer)];
 }
@@ -300,5 +352,6 @@ export function unpackCar(c, a) {
   c.boostT = f & 1 ? 1 : 0; c.shieldT = f & 2 ? 1 : 0; c.spinT = f & 4 ? 1 : 0; c.squashT = f & 8 ? 1 : 0;
   c.shrinkT = f & 16 ? 1 : 0; c.fallT = f & 32 ? 1 : 0; c.invT = f & 64 ? 1 : 0;
   c.finished = !!(f & 128); c.out = !!(f & 256); c.slip = !!(f & 512);
+  c.drift = f & 1024 ? 1 : 0; c.pushT = f & 2048 ? 1 : 0;
   c.total = a[8]; c.steer = a[9];
 }

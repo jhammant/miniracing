@@ -308,7 +308,7 @@ export class UI {
           <label>SOUND</label><input type="range" min="0" max="100" value="${Math.round(store.sfx * 100)}" data-vol="sfx" aria-label="Sound volume">
           <label>MUSIC</label><input type="range" min="0" max="100" value="${Math.round(store.music * 100)}" data-vol="music" aria-label="Music volume">
         </div>
-        <p class="blurb">STEER: ◀ ▶ OR A D &nbsp; BRAKE: ▼ OR S &nbsp; POWER-UP: SPACE &nbsp; HORN: H</p>
+        <p class="blurb">STEER: ◀ ▶ OR A D &nbsp; BRAKE: ▼ OR S &nbsp; POWER-UP: SPACE &nbsp; HORN: H<br>TAP BRAKE IN A CORNER TO POWERSLIDE</p>
         <div class="row">
           ${inRace ? '<button class="btn" data-act="leave">LEAVE RACE</button>' : ''}
           ${inRace && this.room?.kind === 'solo' ? `<button class="btn" data-act="tolobby">${this.room.settings.mode === 'trial' ? 'END THE TRIAL' : 'CHANGE TRACK'}</button>` : ''}
