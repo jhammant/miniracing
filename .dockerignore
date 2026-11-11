@@ -1,0 +1,9 @@
+node_modules
+dist
+data
+.git
+.project-map
+.worktrees
+test/e2e/shots
+*.log
+.env*

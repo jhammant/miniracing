@@ -1,0 +1,16 @@
+name: miniracing
+runtime: docker
+port: 8080
+access: public
+hostname: miniracing.hammantlabs.com
+
+manifest_version: 2
+metadata:
+  description: Miniature cars racing round a house. Top-down 3D racer for up to 16 players, in the browser.
+  tags: [oss, game, multiplayer]
+  owner: jon
+health:
+  path: /health
+# The lap-record board. The container runs as uid 1000 (node), so the folder must be writable by it.
+volumes:
+  - /mnt/tank/apps/miniracing/data:/data
