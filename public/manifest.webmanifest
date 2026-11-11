@@ -1,0 +1,11 @@
+{
+  "name": "Mini Racing",
+  "short_name": "Mini Racing",
+  "description": "Tiny cars, big house. A top-down 3D racer for up to 16 players.",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#1b1430",
+  "theme_color": "#1b1430",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
