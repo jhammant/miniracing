@@ -1,0 +1,7 @@
+node_modules
+dist
+data
+.project-map
+*.log
+.DS_Store
+test/e2e/shots
