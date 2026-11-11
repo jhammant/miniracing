@@ -32,6 +32,43 @@ export function initInput(root) {
   });
 }
 
+// iOS Safari zooms the page on a double tap or a pinch whatever the viewport tag
+// and touch-action say, and a zoomed game cannot be played or zoomed back out.
+// So: refuse the gestures, and if the page ends up zoomed anyway, undo it.
+export function stopZoom() {
+  const opts = { passive: false }, stop = (e) => e.preventDefault();
+  for (const ev of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(ev, stop, opts);
+  let x = 0, y = 0, lastEnd = 0;
+  document.addEventListener('touchstart', (e) => {
+    ({ clientX: x, clientY: y } = e.touches[0]);
+    if (e.target.closest?.('canvas, [data-pad]')) e.preventDefault(); // nothing here needs a click
+  }, opts);
+  document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, opts);
+  // The second tap of a quick pair is the one that zooms. Swallow it, and press
+  // the button under it ourselves so fast taps on a menu still count.
+  document.addEventListener('touchend', (e) => {
+    const quick = e.timeStamp - lastEnd < 400, t = e.changedTouches[0];
+    lastEnd = e.timeStamp;
+    if (!quick || !e.cancelable || e.target.closest?.('input')) return;
+    e.preventDefault();
+    if (Math.hypot(t.clientX - x, t.clientY - y) < 12) e.target.closest?.('button')?.click();
+  }, opts);
+  fitToView();
+}
+
+// Shrinks the page back to what is visible, so a zoom that gets through shows nothing odd.
+function fitToView() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const fit = () => {
+    const on = vv.scale > 1.01, { style } = document.body;
+    style.transformOrigin = on ? '0 0' : '';
+    style.transform = on ? `translate(${vv.offsetLeft}px, ${vv.offsetTop}px) scale(${1 / vv.scale})` : '';
+  };
+  vv.addEventListener('resize', fit);
+  vv.addEventListener('scroll', fit);
+}
+
 // Touch pad wiring, shared with the phone-controller page. `steer` gets -1/0/1
 // from which half of the pad the finger is on, so sliding across flips sides.
 export function bindPad(root, { steer, brake, item }) {

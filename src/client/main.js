@@ -11,7 +11,7 @@ import { UI } from './ui.js';
 import { Pad } from './pad.js';
 import { Game } from './game.js';
 import { WsConn, LocalConn } from './net.js';
-import { initInput, readInput, takeItemTap, takePauseTap } from './input.js';
+import { initInput, stopZoom, readInput, takeItemTap, takePauseTap } from './input.js';
 import { audio } from './audio.js';
 import { store, isTouch, recordPb, fmtTime, ordinal } from './store.js';
 import { TRACKS } from '../shared/tracks.js';
@@ -25,6 +25,7 @@ const $ = (id) => document.getElementById(id);
 const scene = new Scene($('view'));
 const fx = new Fx(scene);
 initInput($('touch'));
+stopZoom();
 const hud = new Hud($('hud'), $('touch'), { onMenu: () => toggleMenu() });
 
 let session = null; // what the player is in: { kind, conn, game, room, me, pad, ... }
